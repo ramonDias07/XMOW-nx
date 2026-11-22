@@ -55,11 +55,9 @@ O port grava logs em `/switch/XMOW/logs/`. Shaders que faltarem na biblioteca v�
 
 ## Capturas no Switch
 
-Capturas feitas no Switch físico. As cutscenes já aparecem com imagem correta. No gameplay, a cena ainda sai dividida na linha 512 e com as cores erradas, o defeito que a 0.1.9 tenta corrigir (ainda sem teste).
+Captura feita no Switch físico, numa build recente: as cutscenes já aparecem com imagem correta. O estado do gameplay está em [Estado atual](docs/estado.md).
 
 ![Cutscene de abertura com o título do jogo](docs/screenshots/cutscene.jpg)
-
-![Gameplay com a imagem dividida na linha 512 (defeito conhecido)](docs/screenshots/gameplay-imagem-errada.jpg)
 
 ## Contribuições
 
