@@ -6,20 +6,21 @@ Xbox 360. O ReXGlue recompila o código PowerPC do jogo para ARM64. A camada do 
 partir dos shaders traduzidos do próprio jogo.
 
 > [!WARNING]
-> **Em desenvolvimento: ainda não é jogável.** O jogo chega ao gameplay no console, mas a imagem da cena está errada e
-> roda a 5–18 FPS. Não há release; as builds são de diagnóstico. [Estado e histórico dos testes](docs/estado.md)
+> **Em desenvolvimento: ainda não é jogável.** O jogo chega ao gameplay no console com o quadro inteiro, mas ainda há
+> defeitos de imagem (névoa e clarão) e roda a 15–28 FPS. A release v0.1.16 é só código-fonte, para quem quer compilar e
+> testar. [Estado e histórico dos testes](docs/estado.md)
 
 [Estado atual](docs/estado.md) · [Como compilar](docs/build.md) · [Capturas](#capturas-no-switch) · [Referências](docs/referencias.md) · [English overview](#english-overview)
 
 ## Estado do port
 
-Build atual: **0.1.9-diag**.
+Build atual: **0.1.16** ([release](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.16), só código-fonte).
 
 | Área | Estado |
 | --- | --- |
-| Switch físico | Testadas no console até a 0.1.8: logos e vídeos Bink com áudio, menus com imagem 3D, cutscenes e entrada na primeira fase com HUD. **Ainda não testada:** a 0.1.9, que corrige o MSAA 2X da cena. |
-| Imagem | A cena do gameplay sai dividida na linha 512 e com brilho estourado. A causa foi achada no teste 14 (alias MSAA da camada do gears2-nx) e a correção está na 0.1.9. |
-| Desempenho | 5 a 18 FPS, com 1.700 a 8.000 desenhos por quadro e GPU de 50 a 140 ms por quadro. A otimização vem depois da imagem. |
+| Switch físico | Testadas no console até a 0.1.13: logos e vídeos Bink com áudio, menus com imagem 3D, cutscenes e o gameplay da primeira fase com HUD e quadro inteiro. **Ainda não testadas:** a 0.1.14 a 0.1.16 (menu novo e ajustes de desempenho). |
+| Imagem | A tela dividida (0.1.9) e as manchas brancas (0.1.10) foram resolvidas. Falta a névoa de altura, omitida por enquanto, e o clarão na abertura da fase. |
+| Desempenho | 15 a 28 FPS no gameplay, com a GPU entre 35 e 70 ms por quadro (0.1.12). A 0.1.16 traz os primeiros ajustes, ainda sem teste. |
 | Shaders | 16.457 shaders do jogo traduzidos (2.127 VS, 14.316 PS e variantes), com cache DKSH lido do SD sob demanda. |
 
 ## O que você precisa
@@ -48,7 +49,8 @@ dump. A entrega fica em `out/sd/switch/XMOW/`, e o disco extraído vai em `game_
 
 | Comando | Função |
 | --- | --- |
-| `+` e `−` juntos | Menu do port (modo de vídeo; vale na próxima abertura). |
+| `+` e `−` juntos | Menu rápido do port (resolução de saída, GPU boost oficial, névoa de altura e outras opções). |
+| `L + R + →` | Ajustes avançados (renderização, desempenho e diagnóstico). |
 | `L3 + R3` | Captura de diagnóstico do próximo quadro (texturas resolvidas em `volcado_NN/` e trace no log). |
 
 O port grava logs em `/switch/XMOW/logs/`. Shaders que faltarem na biblioteca vão para `shaders_dump/`.
@@ -88,6 +90,8 @@ você gosta deste port, apoie as versões oficiais.
   [gears-of-war-2-pc-port](https://github.com/santiquiroz/gears-of-war-2-pc-port) · [gears-judgement-recomp](https://github.com/OverkillLabs3/gears-judgement-recomp)
 - **Tom Clay, colaboradores do Xenia e nx-mod** pelo recompilador, runtime e suporte ao Switch.
   [ReXGlue](https://github.com/rexglue/rexglue-sdk) · [ReXGlue SDK NX](https://github.com/nx-mod/rexglue-sdk-nx)
+- **panalexeu** pelo singularity-nx: o patch que desliga o *predicated tiling* no próprio jogo e 7 patches do SDK.
+  [singularity-nx](https://github.com/panalexeu/singularity-nx)
 - **nebadasSwifty** pelo masseffect-nx, base da busca de lacunas do codegen. [masseffect-nx](https://github.com/nebadasSwifty/masseffect-nx)
 - **FurryLilManChild** e colaboradores pelo LoS1-nx, de onde vem o extrator XDVDFS. [LoS1-nx](https://github.com/FurryLilManChild/LoS1-nx)
 - **hedge-dev**, **devkitPro**, **SwitchWakerHD** e **Khronos** pelas ferramentas usadas na tradução de shaders.
@@ -99,11 +103,11 @@ Veja de onde veio cada parte e o que é deste port em [Referências](docs/refere
 
 **XMOW-nx** is an unofficial Nintendo Switch homebrew port of **X-Men Origins: Wolverine – Uncaged Edition** from
 Xbox 360. It uses ReXGlue for static recompilation and the app layer and Deko3D renderer of
-[gears2-nx](https://github.com/VasilkovND/gears2-nx). **It is a work in progress and not playable yet.** Build
-0.1.8 reaches gameplay on a physical Switch (logos, Bink videos with audio, 3D menus, cutscenes and the first level
-with HUD), but the scene renders split at line 512 with blown-out highlights, at 5–18 FPS. The cause (the gears2-nx
-MSAA alias applied to the game's 2X MSAA tiles) was found, and the fix in 0.1.9 has not been tested on hardware yet.
-There is no release.
+[gears2-nx](https://github.com/VasilkovND/gears2-nx). **It is a work in progress and not playable yet.** Up to
+build 0.1.13 it was tested on a physical Switch: logos, Bink videos with audio, 3D menus, cutscenes and the first level
+with HUD and the full frame, at 15–28 FPS. The height fog is still skipped and the level intro has a bright glare.
+Builds 0.1.14–0.1.16 (new menu, first performance work) are not tested yet. Release
+[v0.1.16](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.16) is source code only.
 
 Build from source with your own **Uncaged Edition (USA, Europe) Xbox 360 ISO**, no title update. The build tools
 (Windows PowerShell for now) generate the code, the shaders and the NRO locally. Hardware test reports and rendering

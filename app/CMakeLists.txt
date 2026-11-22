@@ -29,6 +29,12 @@ add_executable(xmow
     src/gow2_cpu.cpp
     src/gow2_menu.cpp
     src/gow2_resolution.cpp
+    # XmowGamePatch(id): the switches of the game patches tools/codegen/patch_xmow_jogo.py puts in the code.
+    src/xmow_game_patches.cpp
+    # Official GPU boost (xmow_gpu_boost cvars; a pthread applies the apm profile).
+    src/xmow_gpu_boost.cpp
+    # Direct3D's GPU spin and occlusion GetData hooks (xmow_spin_cede, xmow_consulta_inmediata).
+    src/xmow_perf_hooks.cpp
     # The shader library reader, shared with the PC tools (shaders/).
     ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ds_shader_library.cpp
 )
@@ -56,7 +62,7 @@ else()
 endif()
 
 # The version (NACP and the first lines of the log) and what the build was made from.
-set(XMOW_NRO_VERSION "0.1.9-diag" CACHE STRING "NACP version")
+set(XMOW_NRO_VERSION "0.1.16" CACHE STRING "NACP version")
 set(GOW2_VERSION "${XMOW_NRO_VERSION}")
 # The build is identified by the SDK base it was made on.
 set(GOW2_COMMIT "rexglue-sdk-nx f961303 + patches/rexglue-nx.patch, codegen without patch_local_regs")

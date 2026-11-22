@@ -48,6 +48,7 @@ if (Test-Path "$D\generated") { Remove-Item -Recurse -Force "$D\generated" }
 Passo 'codegen' "`"$Rexglue`" codegen xmow_manifest.toml"
 
 # 3. passes over the generated code, in the order of gears2-nx codegen.sh (the two Gears-only passes are skipped)
+Passo 'patch_xmow_jogo' "$Run `"$Tools\patch_xmow_jogo.py`" `"generated/default/*.cpp`""
 Passo 'patch_switch_traps' "$Run `"$Tools\patch_switch_traps.py`" `"generated/default/*.cpp`""
 if (-not $SemBarreiras) {
     Passo 'patch_memory_barriers' "$Run `"$Tools\patch_memory_barriers.py`" `"generated/default/*.cpp`""

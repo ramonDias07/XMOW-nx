@@ -12,4 +12,5 @@ As contribuições dos projetos usados como base estão em [Referências](docs/r
   do codegen, adaptados ao Wolverine.
 - **gears-of-war-2-pc-port (Santiago Quiroz Upegui e colaboradores, BSD-3-Clause)** — passes de traps, barreiras de
   memória e *spin hints* sobre o código gerado.
+- **singularity-nx (panalexeu, GPL-3.0)** — patch do jogo que desliga o *predicated tiling* e 7 patches do SDK.
 - **masseffect-nx (nebadasSwifty, GPL-3.0)** — ferramentas de busca de lacunas do codegen.

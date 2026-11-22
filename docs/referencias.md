@@ -19,6 +19,10 @@
 - **XenosRecomp** da hedge-dev (MIT), na versão modificada do gears2-nx. Este port acrescenta 256 constantes de pixel
   shader, três *cubemaps* por shader e uma correção para *vertex fetch* com máscara de destino vazia.
   [XenosRecomp](https://github.com/hedge-dev/XenosRecomp)
+- **singularity-nx** de panalexeu (GPL-3.0), outro jogo da Raven em UE3 sobre o gears2-nx. Dele vêm a ideia do patch
+  que desliga o *predicated tiling* no próprio jogo (`tools/codegen/patch_xmow_jogo.py`, modelado no
+  `patch_singularity.py`) e os patches do SDK 0002, 0004, 0007, 0008, 0010, 0011 e 0014 (o último adaptado à mão),
+  incluídos em `patches/rexglue-nx.patch`. [singularity-nx](https://github.com/panalexeu/singularity-nx)
 - **masseffect-nx** de nebadasSwifty (GPL-3.0). A busca de lacunas do codegen em `tools/codegen/gaps/` usa cópias
   ajustadas das ferramentas dele, e a memória reservada em blocos de 2 MB seguiu o mesmo caminho.
   [masseffect-nx](https://github.com/nebadasSwifty/masseffect-nx)

@@ -113,7 +113,7 @@ class XmowApp : public rex::ReXApp {
   // The scene resolution first: the game asks the OS for the display mode while it sets up its renderer.
   void OnPreLaunchModule() override {
     gow2::resolucion::Aplicar();
-    gow2::menu::Instalar();
+    gow2::menu::Instalar(package_ / "xmow.toml");  // the same file as paths.config_path (OnConfigurePaths)
     gow2::cpu::Configurar();
   }
 

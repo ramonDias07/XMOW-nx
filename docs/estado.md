@@ -1,18 +1,17 @@
 # Estado e histórico dos testes
 
-Todas as builds até agora são de diagnóstico (`-diag`). Nenhuma é jogável. Os testes foram feitos num Switch físico,
+Até a 0.1.15 as builds eram de diagnóstico (`-diag`); a 0.1.16 é a primeira com os diagnósticos desligados. Nenhuma é jogável ainda. Os testes foram feitos num Switch físico,
 em modo portátil, abrindo o port por forwarder NSP.
 
-## Onde o port está (0.1.9-diag)
+## Onde o port está (0.1.16)
 
-- **Funciona no console:** logos e vídeos Bink com áudio, menus do jogo com imagem 3D, cutscenes e a entrada no
-  gameplay (fase da selva, `jungle1`), com o HUD.
-- **Imagem errada no gameplay.** O teste 14 achou a causa da tela dividida na linha 512. A camada do gears2-nx trata toda
-  superfície MSAA como um alias 1X de altura dupla, enquanto o Wolverine desenha a cena em MSAA 2X com duas teselas. A
-  0.1.9 desliga esse alias para MSAA 2X (`xmow_msaa2x_como_1x`), mas **ainda não foi testada**. A metade de cima da cena
-  também sai com brilho estourado, provavelmente pela mesma causa.
-- **Desempenho:** 5 a 18 FPS com 1.700 a 8.000 desenhos por quadro. A GPU leva 50 a 140 ms por quadro. A otimização
-  só começa depois que a imagem estiver certa.
+- **Funciona no console:** logos e vídeos Bink com áudio, menus do jogo com imagem 3D, cutscenes e o gameplay na fase
+  da selva (`jungle1`), com o HUD e o quadro inteiro (a tela dividida na linha 512 foi resolvida na 0.1.9).
+- **Imagem do gameplay quase certa.** As manchas brancas sumiram com o *predicated tiling* desligado (0.1.10) e o chão
+  voltou sem os pré-passos de Z (0.1.11). A névoa de altura (PS 2639) ainda sai estourada e é omitida por enquanto
+  (`xmow_omitir_ps`), e a abertura da fase ainda tem um clarão.
+- **Desempenho:** 15 a 28 FPS no gameplay, com a GPU entre 35 e 70 ms por quadro (teste 18). A 0.1.16 traz os primeiros
+  ajustes de desempenho, ainda sem teste no console.
 - **Desligado por enquanto:** consultas de oclusão reais (escondiam o herói enquanto a profundidade estava errada).
 
 ## Histórico
@@ -32,7 +31,13 @@ em modo portátil, abrindo o port por forwarder NSP.
 | 0.1.6 | Captura mostra a cena 3D certa antes do vermelho | Retângulos que leem textura deixam de ser clears; 256 constantes de pixel shader. |
 | 0.1.7 | Vídeos e cutscenes certos; menu 3D; tela dividida na linha 512 | Cor do clear vinda do vértice; captura da EDRAM na cópia da tesela de baixo. |
 | 0.1.8 | Causa da tela dividida achada (alias MSAA 2X) | 0.1.9: MSAA 2X vira 1X sem alias. |
-| 0.1.9 | Não testada | — |
+| 0.1.9 | **Tela dividida resolvida**: quadro inteiro, Wolverine visível; manchas brancas e névoa estourada na selva | 0.1.10: *predicated tiling* desligado no próprio jogo (`GUseTilingMode = 0`, como o singularity-nx) e 7 patches do SDK do singularity-nx; captura A/B por grupo de desenhos. |
+| 0.1.10 | Manchas brancas sumiram; chão e fundo do título só na profundidade (pretos) | 0.1.11: sem pré-passo de Z e sem pré-passo mascarado. |
+| 0.1.11 | Chão de volta; a névoa (PS 2639) e os translúcidos estouram a abertura | 0.1.12: mais log de constantes e dos efeitos de tela inteira. |
+| 0.1.12 | Gameplay certo sem a névoa 2639; 15 a 28 FPS (GPU 35 a 70 ms) | 0.1.13: névoa 2639 omitida (contorno, não correção); menos capturas automáticas. |
+| 0.1.13 | Gameplay com cor; a abertura ainda estoura | 0.1.14: menu rápido e avançado no padrão dos outros ports, vsync relaxado, GPU boost oficial, resolução de saída. |
+| 0.1.14 / 0.1.15 | Não testadas | 0.1.15: menu igual ao do Budokai3-nx; diagnóstico do perfil da GPU; valor do clear de Z em float24. |
+| 0.1.16 | Não testada | Diagnósticos desligados; ganchos de CPU (espera da GPU, consultas de oclusão, cache de shaders); destinos, resolves e barreiras mais leves no Deko3D (patch 1017). |
 
 ## Como ajudar nos testes
 

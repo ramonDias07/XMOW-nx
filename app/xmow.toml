@@ -1,31 +1,37 @@
-# X-Men Origins: Wolverine (ReXGlue + deko3d, app layer from gears2-nx) 0.1.9-diag. Goes next to XMOW.nro (SD: /switch/XMOW).
+# X-Men Origins: Wolverine (ReXGlue + deko3d, app layer from gears2-nx) 0.1.16. Goes next to XMOW.nro (SD: /switch/XMOW).
 # Keys are the gears2-nx gow2.toml ones (cvar names kept: gow2_*); texts are comments only. Every key below can be
-# removed: the value shown is the default unless it says otherwise ("diag" = turned on for this diagnostic build).
+# removed: the value shown is the default unless it says otherwise ("diag" = turned on only in the diagnostic block at the end).
 # Open it through the NSP forwarder (it runs as an application, with the full memory).
 #
 # Files beside the NRO: xmow.toml (this), xmow_shaders.dslib + shadercache_dksh.bin (shader library and DKSH cache),
 # game_root/ (the extracted disc: default.xex and WGame/), cache/ (cache: for the game), logs/ (xmow_NNN.log, logs/rex/),
 # xmow_resolucion.txt (written by the menu), telemetria.flag (turns the telemetry below on), sin_resplandor.flag (no use here).
-# Controls:
-#   + and - together : port menu (video mode; applies at the next start)
+# Controls (modelo-menu-port standard):
+#   + and - together : quick menu (internal resolution (fixed 1280X720), output resolution, official GPU boost, height fog,
+#                      FPS counter, mute audio, save and close, restore defaults).
+#   L + R + Right    : advanced settings (graphics, frame pacing, deko rendering, GPU and cache, audio, controls, port fixes, logs).
+#   Changes made in the menu are written into this file by SAVE (only the menu's keys; comments are kept).
 #   L3 + R3          : capture for diagnosis: dump of the next frame (every resolved texture as BMP in volcado_NN/)
 #                      + full draw trace in the log
 # The gears2-nx ZL + ZR shortcuts are all off (switch_atajos_depuracion and switch_atajo_contador_fps = false).
 
 # ---- Logs ----
-# ZL + ZR shortcuts of the SDK off (only + -, and L3 + R3)
+# ZL + ZR shortcuts of the SDK off (modelo-menu-port standard: only + -, and L3 + R3)
 switch_atajos_depuracion = false
 switch_atajo_contador_fps = false
-# diag: the log goes to <NRO folder>/logs/xmow_NNN.log (this SDK always writes it; log_to_file is the old XMOW key, kept).
-log_to_file = true
+# The log always goes to /switch/XMOW/logs (xmow_NNN.log); there is no key for it.
 log_level = "info"
 
 # ---- Presentation ----
 video_mode_width = 1280
 video_mode_height = 720
 vsync = true
+# xmow_resolucao_saida = 1080   # output height: docked 1080/900/720/540, handheld 720/540/360
+# xmow_vblank_hz = 60   # 120 = frame rate up to 60 (experimental); the game itself locks to 30
+# (xmow_vsync_relaxado: no effect, nothing sets a swap interval in this game; removed from the menu)
+# xmow_gpu_boost = false   # handheld only
 clock_no_scaling = true
-# diag: frame counter on screen
+# frame counter on screen (user choice)
 switch_contador_fps = true
 # Video mode at start (also set by xmow_resolucion.txt, which wins): 0 or 720 = 1280x720, 540 = 960x540 (EXPERIMENTAL here:
 # only the SDK video_mode is changed, there is no scene patch for this game as there was in gears2-nx).
@@ -41,40 +47,55 @@ cache_device = true
 # The library is read as an index and each shader comes from the card the first time it is used (needed: ~470 MB).
 gow2_shaders_por_demanda = true
 # diag: write the microcode of shaders no step identifies to shaders_unknown/ (up to 2000)
-gow2_volcar_desconocidos = true
+gow2_volcar_desconocidos = false
 # Write EVERY shader container the game creates through Create{Vertex,Pixel}Shader to shaders_dump/ (containers the
 # library does not have are always written). Heavy on the SD card.
 # gow2_shader_dump = false
 
-# ---- Diagnostics (the telemetry ones act only with telemetria.flag beside the NRO; this candidate has it) ----
-nfsmw_dk_perfil_gpu_s = 20
+# ---- Diagnostics (all off for play; the telemetry ones act only with telemetria.flag beside the NRO, which is not shipped) ----
+nfsmw_dk_perfil_gpu_s = 0
 # Reduced capture (640x360) to capturas/auto_NNNN.bmp every N s; 0 = never
-gow2_auto_captura_s = 5
+gow2_auto_captura_s = 0
 # Dump of the resolved textures of a heavy frame: first at second N, then every M s (0 = only the first), at most K
 gow2_auto_volcado_primero_s = 90
 gow2_auto_volcado_cada_s = 60
-gow2_auto_volcados_max = 3
+# Each trace/dump stalls the game for seconds while it writes to the SD (test 18).
+gow2_auto_volcados_max = 0
 gow2_auto_volcado_dibujos = 800
 # Structure trace of a heavy frame every N s, at most M
-gow2_traza_cada_s = 60
-gow2_trazas_max = 20
+gow2_traza_cada_s = 0
+gow2_trazas_max = 0
 # CPU profile sampling the stacks of each thread (a bit slower)
-gow2_perfil_pilas = true
+gow2_perfil_pilas = false
 # ZL+ZR+Right: skip-one-shader search modes (pixel shaders of the base pass; false = vertex shaders)
-gow2_busqueda_ps = true
-gow2_busqueda_directa = true
+gow2_busqueda_ps = false
+gow2_busqueda_directa = false
 # Probe of ZL+ZR+Left: x,y of an 8x8 square
 gow2_sonda = "700,650"
+# 0.1.10: white blobs of test 15. After each automatic capture, 4 frames without one group of draws and a second capture
+# with the same number, in turns: auto_NNNN_tr (no translucent draws into the 7e3 scene), auto_NNNN_sm (no modulated
+# shadows), auto_NNNN_ps (none of the pixel shaders in xmow_ab_ps). The first 3 draws of each listed PS go to the log.
+# 0.1.14: the groups now alternate _ta (alpha-blended translucents: SRC_ALPHA x 1-SRC_ALPHA) and _to (the other translucents).
+# (0.1.13, old) the groups alternated: _tr (all translucents) and _p<N> (only pixel shader N of xmow_ab_ps, one per turn); the first 3 draws of each listed PS go to the log.
+xmow_captura_ab = false
+xmow_ab_ps = "2046,2892,1207,10127,1917,1121,6971"
+# Pixel shaders never drawn. 2639 = full-screen height fog that washed the image blue-white (tests 17/18). Empty = draw everything.
+xmow_omitir_ps = "2639"
+
+# ---- Game patches (in the recompiled code; each can be turned off here) ----
+# 1: GUseTilingMode = FALSE, the scene is drawn at once instead of in two predicated tiles (as singularity-nx does).
+xmow_patch_sem_tiling = true
 
 # ---- Game specific settings that are NOT known for Wolverine (all neutral by default) ----
 # Base pass target of the scene, for the search modes and the probe: EDRAM base of color 0 and its color format; -1 = any.
 # (Gears of War 2 used 0x2D0 = 720 and format 3.) Set them once the frame trace shows Wolverine's scene target.
-# gow2_edram_base_escena = -1
-# gow2_formato_escena = -1
+# Wolverine (teste 16, traza sin tiling): el pase base dibuja en EDRAM 0x2D0 (720) formato 3 (7e3).
+gow2_edram_base_escena = 720
+gow2_formato_escena = 3
 # gow2_formato_luces = -1
-# Skip the depth-only prepass of the scene (Gears needed it: the prepass depth did not match the base pass). Off here: it
-# also drops depth-only draws into EDRAM base 0 that may be Wolverine's shadow maps. Try it if the world comes out black.
-# gow2_sin_prepaso_z = false
+# Skip the scene's depth prepass and the masked (alpha-tested) prepass, as singularity-nx: drawn, the base pass (GEQUAL) missed their depth by rounding and the ground came out black (test 16). Shadow maps are at EDRAM 5A0, not affected.
+gow2_sin_prepaso_z = true
+gow2_sin_prepaso_enmascarado = true
 # Shader hash fixes of Gears of War 2 (trees, lamp glows, velocity buffer): meaningless for this game.
 # gow2_ajustes_gears2 = false
 # Hide startup movies (parts of paths separated by commas) with gow2_saltar_logos = true; none known yet.
@@ -101,3 +122,22 @@ gow2_oclusion_sin_esperar_ms = 8
 # ---- Controls ----
 # input_xbox_layout = false
 # input_vibracion = false
+
+# ---- MODO DIAGNOSTICO (descomente para diagnostico) ----
+# Uncomment these lines (and comment the same keys above) for a diagnostic session. The stack sampler and the
+# periodic telemetry also need an empty file named telemetria.flag in /switch/XMOW (sdmc:/switch/XMOW/telemetria.flag);
+# without it they do nothing. Remove the flag again for normal play.
+# log_level = "info"
+# gow2_volcar_desconocidos = true
+# nfsmw_dk_perfil_gpu_s = 20
+# gow2_auto_captura_s = 5
+# gow2_auto_volcado_primero_s = 90
+# gow2_auto_volcado_cada_s = 60
+# gow2_auto_volcados_max = 2
+# gow2_auto_volcado_dibujos = 800
+# gow2_traza_cada_s = 60
+# gow2_trazas_max = 2
+# gow2_perfil_pilas = true
+# gow2_busqueda_ps = true
+# gow2_busqueda_directa = true
+# xmow_captura_ab = true

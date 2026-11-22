@@ -25,6 +25,8 @@
 // forever for a GPU that never reads its commands.
 
 #include "gow2_gpu.h"
+#include "xmow_gpu_boost.h"
+#include "xmow_perf.h"
 
 void gow2_log_main_thread();  // src/gow2_guards.cpp
 
@@ -43,6 +45,8 @@ void gow2_log_main_thread();  // src/gow2_guards.cpp
 #include <cstring>
 #include <iterator>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/graphics/registers.h>
@@ -123,7 +127,7 @@ REXCVAR_DECLARE(bool, nfsmw_dk_borrado_color_aplazado);
 REXCVAR_DECLARE(bool, nfsmw_dk_borrado_z_aplazado);
 
 // Automatic data collection while the renderer is being brought up: nothing to press on the console.
-// Set by the GetData hook (gow2_perf_hooks.cpp) while Direct3D answers "not yet": Unreal's rendering thread is waiting
+// Set by the GetData hook (xmow_perf_hooks.cpp, real occlusion only) while Direct3D answers "not yet": Unreal's rendering thread is waiting
 // for a query, so OcclusionPoll answers the ones still being counted instead of letting it wait for the GPU.
 std::atomic<bool> g_gow2_query_waited{false};
 
@@ -139,15 +143,31 @@ REXCVAR_DEFINE_BOOL(xmow_rectangulos_como_borrado, true, "XMOW",
                     "Toda lista de rectangulos (primitiva 8) se hace como borrado emulado aunque su VS este en la "
                     "biblioteca: en Wolverine son los shaders de Clear del propio Direct3D (VS n2367 / PS n4567, sacados "
                     "del XEX), y el renderizador no dibuja listas de rectangulos (causa 108)");
-REXCVAR_DEFINE_INT32(gow2_auto_captura_s, 5, "XMOW",
+REXCVAR_DEFINE_BOOL(xmow_captura_ab, false, "XMOW",
+                    "Diagnostico de las manchas blancas (teste 15): tras cada captura automatica, 4 cuadros sin un grupo "
+                    "de dibujos y otra captura, por turnos: auto_NNNN_ta = sin los translucidos con mezcla alfa "
+                    "(SRC_ALPHA x 1-SRC_ALPHA), _to = sin los demas translucidos (7e3, con mezcla), (grupos viejos: _tr = "
+                    "todos los translucidos, _sm = sombras moduladas, _ps = PS de xmow_ab_ps) "
+                    "(XMOW: padrao = xmow.toml entregue)");
+REXCVAR_DEFINE_STRING(xmow_ab_ps, "10127,1121,1917,2639,6971", "XMOW",
+                      "Numeros de PS (de la biblioteca) que la captura _ps no dibuja; sus 3 primeros dibujos de la "
+                      "sesion van al log con texturas y constantes");
+REXCVAR_DEFINE_STRING(xmow_omitir_ps, "2639", "XMOW",
+                      "Pixel shaders (numeros del dslib, separados por coma) que nunca se dibujan. 2639: la niebla por "
+                      "altura/profundidad de pantalla entera, que lavaba toda la imagen en blanco azulado (teste 17/18)");
+REXCVAR_DEFINE_INT32(gow2_auto_captura_s, 0, "XMOW",
                      "Cada cuantos segundos se guarda una captura reducida (640x360) en capturas/auto_NNNN.bmp; 0 = nunca");
 REXCVAR_DEFINE_INT32(gow2_auto_volcado_primero_s, 120, "XMOW",
                      "Segundo de juego del primer volcado automatico de las texturas resueltas de un fotograma");
 REXCVAR_DEFINE_INT32(gow2_auto_volcado_cada_s, 300, "XMOW", "Segundos entre volcados automaticos; 0 = solo el primero");
-REXCVAR_DEFINE_BOOL(gow2_sin_prepaso_z, false, "XMOW",
+REXCVAR_DEFINE_BOOL(gow2_sin_prepaso_enmascarado, true, "XMOW",
+                    "Sin el pase previo enmascarado (alpha test): dibujos color+profundidad en la profundidad de la escena "
+                    "(EDRAM 000) con todos los canales de color apagados y escritura de profundidad. Como en singularity-nx: "
+                    "dibujado, el pase base (GEQUAL) no coincidia por redondeo y el suelo salia negro (teste 16)");
+REXCVAR_DEFINE_BOOL(gow2_sin_prepaso_z, true, "XMOW",
                     "Sin el pase previo de solo profundidad de la escena: el pase base escribe su propia profundidad. "
                     "Con el pase previo, la profundidad de dos vertex shaders compilados aparte no coincide bit a bit y "
-                    "el pase base (GEQUAL) se descartaba: el mundo salia negro");
+                    "el pase base (GEQUAL) se descartaba: el mundo salia negro (XMOW teste 16: true, el suelo salia negro)");
 // Gears of War 2 specifics of gears2-nx, all OFF / neutral by default in the XMOW build (what each one assumed is a
 // Gears shader hash or the Gears EDRAM layout; Wolverine's are different or unknown):
 REXCVAR_DEFINE_BOOL(gow2_ajustes_gears2, false, "XMOW",
@@ -168,9 +188,10 @@ REXCVAR_DEFINE_STRING(gow2_logos_ocultos, "", "XMOW",
                       "no debe encontrar (rex_archivos_ocultos). Vacio = ninguno");
 REXCVAR_DEFINE_BOOL(gow2_consultas_siempre_visibles, false, "XMOW",
                     "Consultas de oclusion: cada segundo ZPD cuenta como el final de una consulta visible, aunque no lleve la marca de D3D (prueba)");
-REXCVAR_DEFINE_BOOL(gow2_oclusion_real, true, "XMOW",
+REXCVAR_DEFINE_BOOL(gow2_oclusion_real, false, "XMOW",
                     "Consultas de oclusion reales: la GPU cuenta los pixeles de la caja de cada consulta que pasan la "
-                    "profundidad, y el juego deja de dibujar lo que queda tapado. false = todo visible, como antes");
+                    "profundidad, y el juego deja de dibujar lo que queda tapado. false = todo visible, como antes "
+                    "(XMOW: padrao = xmow.toml entregue)");
 REXCVAR_DEFINE_INT32(gow2_oclusion_espera_ms, 40, "XMOW",
                      "Consultas de oclusion reales: milisegundos desde el final de una consulta que el juego puede "
                      "esperar su resultado; pasado ese tiempo se le contesta visible");
@@ -185,10 +206,10 @@ REXCVAR_DEFINE_STRING(gow2_sonda, "700,650", "XMOW",
 REXCVAR_DEFINE_BOOL(gow2_saltar_logos, false, "XMOW",
                     "Sin los videos de los logotipos del arranque (los de gow2_logos_ocultos). Apagado por defecto: "
                     "en Gears of War 2, sin el archivo el juego leia un puntero nulo (pantalla negra)");
-REXCVAR_DEFINE_BOOL(gow2_busqueda_ps, true, "XMOW",
+REXCVAR_DEFINE_BOOL(gow2_busqueda_ps, false, "XMOW",
                     "Modos de busqueda (ZL+ZR+Right): cada pulsacion deja sin dibujar un pixel shader del pase base "
                     "(false: un vertex shader de los que escriben la profundidad de la escena)");
-REXCVAR_DEFINE_BOOL(gow2_busqueda_directa, true, "XMOW",
+REXCVAR_DEFINE_BOOL(gow2_busqueda_directa, false, "XMOW",
                     "ZL+ZR+Right va directo a los modos de busqueda, sin pasar por los modos 1-10");
 REXCVAR_DEFINE_BOOL(gow2_saltar_vs_rotos, false, "XMOW",
                     "(Solo con gow2_ajustes_gears2.) No dibujar los vertex shaders que rompen la geometria (Gears nivel 2: el VS 38234053372F8F2F, con "
@@ -206,13 +227,34 @@ REXCVAR_DEFINE_BOOL(gow2_arboles_prueba, false, "XMOW",
                     "ZL+ZR+Right cambia el modo de los arboles (0, 1, 2) con una captura, en vez de los modos de busqueda");
 REXCVAR_DEFINE_INT32(gow2_auto_volcado_dibujos, 800, "XMOW",
                      "Dibujos que debe tener el fotograma anterior para un volcado automatico (la escena 3D, no un menu)");
-REXCVAR_DEFINE_INT32(gow2_auto_volcados_max, 4, "XMOW", "Volcados automaticos como mucho (0 = ninguno)");
-REXCVAR_DEFINE_INT32(gow2_traza_cada_s, 60, "XMOW", "Segundos entre trazas de la estructura de un fotograma pesado");
-REXCVAR_DEFINE_INT32(gow2_trazas_max, 20, "XMOW", "Trazas de fotograma como mucho");
-REXCVAR_DEFINE_BOOL(gow2_perfil_pilas, true, "XMOW",
+REXCVAR_DEFINE_INT32(gow2_auto_volcados_max, 0, "XMOW",
+                     "Volcados automaticos como mucho (0 = ninguno) (XMOW: padrao = xmow.toml entregue)");
+REXCVAR_DEFINE_INT32(gow2_traza_cada_s, 0, "XMOW", "Segundos entre trazas de la estructura de un fotograma pesado");
+REXCVAR_DEFINE_INT32(gow2_trazas_max, 0, "XMOW",
+                     "Trazas de fotograma como mucho (XMOW: padrao = xmow.toml entregue)");
+REXCVAR_DEFINE_BOOL(gow2_perfil_pilas, false, "XMOW",
                     "Crea logs/rex/perfil_pilas.flag al arrancar: el perfil de CPU muestrea las pilas de cada hilo "
                     "(rex_perfil.log), algo mas lento");
 #endif
+REXCVAR_DEFINE_INT32(xmow_vblank_hz, 60, "XMOW",
+                     "Vblank rate given to the game. The game waits for 2 vblanks per frame (30 fps). 120 lets it reach 60 "
+                     "fps (EXPERIMENTAL: anything tied to the vblank runs faster).");
+// CPU cuts on the ring thread (test 22: the ring thread 48 % busy, the rendering thread waiting for it).
+REXCVAR_DEFINE_BOOL(xmow_anillo_rptr_rapido, true, "XMOW",
+                    "Ring: the read pointer goes back to the game before the ring waits (WAIT_REG_MEM) and at the end "
+                    "of each batch before waiting for the renderer's uploads, and each publication wakes the threads "
+                    "waiting in Direct3D's spin (xmow_spin_cede)");
+REXCVAR_DEFINE_BOOL(xmow_imload_rapido, true, "XMOW",
+                    "IM_LOAD_IMMEDIATE: a shader load whose raw microcode (hash of the packet's words) was identified "
+                    "before reuses that answer, without the byte swap, the library lock and the identification");
+REXCVAR_DEFINE_BOOL(xmow_diag_solo_activo, true, "XMOW",
+                    "Per-draw diagnostics (A/B capture details, search mode candidates, format/primitive counters of "
+                    "the 10 s report) only in frames where a diagnostic is active (trace, probe, A/B capture, skip or "
+                    "search mode); false = every frame, as before. The search modes take their candidates from the "
+                    "frame before the press: with true they need one of those on, or false here");
+REXCVAR_DECLARE(bool, xmow_spin_cede);           // src/xmow_perf_hooks.cpp
+REXCVAR_DECLARE(int32_t, xmow_spin_cede_us);     // src/xmow_perf_hooks.cpp
+REXCVAR_DECLARE(bool, xmow_consulta_inmediata);  // src/xmow_perf_hooks.cpp
 
 namespace gow2::gpu {
 namespace {
@@ -352,6 +394,11 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
         std::filesystem::remove(stack_flag, ec);  // left by an earlier telemetry run
       }
       REXLOG_INFO("[gpu] telemetry {}", telemetry_ ? "on (telemetria.flag)" : "off");
+      REXLOG_INFO("[xmow perf] xmow_spin_cede={} (xmow_spin_cede_us={}) xmow_consulta_inmediata={} "
+                  "(gow2_oclusion_real={}) xmow_anillo_rptr_rapido={} xmow_imload_rapido={} xmow_diag_solo_activo={}",
+                  REXCVAR_GET(xmow_spin_cede), REXCVAR_GET(xmow_spin_cede_us), REXCVAR_GET(xmow_consulta_inmediata),
+                  REXCVAR_GET(gow2_oclusion_real), REXCVAR_GET(xmow_anillo_rptr_rapido),
+                  REXCVAR_GET(xmow_imload_rapido), REXCVAR_GET(xmow_diag_solo_activo));
       // The renderer's GPU profile of a frame every 20 s (a barrier and two timestamps around each of ~1300 draws, the
       // first draw of each pass drawn twice) and the frame structure traces (hundreds of log lines to the SD card once
       // a minute) are telemetry too: each was a visible hitch.
@@ -542,6 +589,16 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
 #if GOW2_DEKO3D
     rex::x360::g_sincronizaciones_anillo.fetch_add(1, std::memory_order_relaxed);
 #endif
+    xmow::perf::AvisarProgreso();  // a fence the Direct3D spin may be waiting for (xmow_spin_cede)
+  }
+
+  // The ring read pointer back to the game (EnableReadPointerWriteBack), and the spinning threads woken: Direct3D
+  // waits for ring space on it. Only what is behind `rptr` has been read.
+  void PublicarRptr(uint32_t rptr) {
+    const uint32_t writeback = read_pointer_writeback_.load(std::memory_order_acquire);
+    if (!writeback) return;
+    rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback), rptr);
+    xmow::perf::AvisarProgreso();
   }
 
   // --- GPU memory (the two low bits of the address are the byte order) --------
@@ -595,11 +652,23 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   int VblankLoop() {
     rex::system::X_VIDEO_MODE mode;
     rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
-    const double hz = std::max(1.0, double(float(mode.refresh_rate)));
-    const auto interval =
-        std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz));
+    const double modo_hz = std::max(1.0, double(float(mode.refresh_rate)));
+    // The rate comes from xmow_vblank_hz (clamped 30..240); 60 means the video mode's own refresh, as before.
+    auto leer_hz = [&]() {
+      const int pedido = std::clamp(int(REXCVAR_GET(xmow_vblank_hz)), 30, 240);
+      return pedido == 60 ? modo_hz : double(pedido);
+    };
+    double hz = leer_hz();
+    auto interval = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz));
+    REXLOG_INFO("[xmow quadro] vblank {} Hz", hz);
     auto next = Clock::now() + interval;
     while (active_.load(std::memory_order_acquire)) {
+      const double nuevo_hz = leer_hz();
+      if (nuevo_hz != hz) {
+        hz = nuevo_hz;
+        interval = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / hz));
+        REXLOG_INFO("[xmow quadro] vblank {} Hz", hz);
+      }
       const auto now = Clock::now();
       // After a long pause (loading, a debugger) the missed vblanks are not replayed.
       if (now - next > std::chrono::milliseconds(250)) {
@@ -661,27 +730,31 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       // used to pass before any space came back. What is behind reader.pos has been read already.
       const uint32_t writeback_lote = read_pointer_writeback_.load(std::memory_order_acquire);
       uint32_t publicado = read;
+      // xmow_anillo_rptr_rapido: WAIT_REG_MEM publishes this reader's position before it waits (PacketType3).
+      const bool rptr_rapido = REXCVAR_GET(xmow_anillo_rptr_rapido);
+      lector_anillo_ = rptr_rapido ? &reader : nullptr;
       while (reader.Pending()) {
         if (!Packet(reader, 0)) {
           break;  // partial packet: the rest comes with the next CP_RB_WPTR
         }
         if (writeback_lote && ((reader.pos - publicado) & reader.mask) >= kRptrPaso) {
-          rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback_lote), reader.pos);
+          PublicarRptr(reader.pos);
           publicado = reader.pos;
         }
       }
+      lector_anillo_ = nullptr;
       read = reader.pos;
+      // Not a GuestSeesGpuProgress: it is written after every batch of the ring, and each one made the renderer's
+      // geometry store check every range again (an epoch). Ring memory comes back only after a wrap, frames later.
+      // With xmow_anillo_rptr_rapido the batch's end goes back before the wait for the renderer's uploads (as the
+      // writebacks inside the batch already did): the ring words are consumed, the uploads are of vertex memory.
+      if (rptr_rapido && read != publicado) PublicarRptr(read);
 #if GOW2_DEKO3D
       if (destinos_) {
         destinos_->EsperarSubidas();
       }
 #endif
-      const uint32_t writeback = read_pointer_writeback_.load(std::memory_order_acquire);
-      if (writeback) {
-        rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback), read);
-        // Not a GuestSeesGpuProgress: it is written after every batch of the ring, and each one made the renderer's
-        // geometry store check every range again (an epoch). Ring memory comes back only after a wrap, frames later.
-      }
+      if (!rptr_rapido) PublicarRptr(read);
     }
     return 0;
   }
@@ -712,6 +785,15 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
                 s.cargas, s.por_direccion, s.direccion_rechazada, s.por_aprendizaje, s.por_microcodigo,
                 s.por_parecido, s.desconocidas,
                 s.objetos, s.objetos_sin_entrada, s.objetos_sin_direccion);
+    {
+      const xmow::perf::Contadores p = xmow::perf::LeerContadores();
+      REXLOG_INFO("[xmow perf] {:.1f} s: {} shader loads reused (xmow_imload_rapido, not in the loads above); {} "
+                  "Direct3D spin waits yielded ({:.1f} ms); {} occlusion GetData answered at once; per-draw "
+                  "diagnostics {}",
+                  seconds, imload_rapidas_, p.esperas, double(p.esperas_us) / 1000.0, p.consultas,
+                  diag_activo_ ? "on" : "off (the draw targets / primitive types / indices below are not counted)");
+      imload_rapidas_ = 0;
+    }
     // What the draws sent to the renderer target and draw (ColorRenderTargetFormat of each written color
     // target, DepthRenderTargetFormat when depth is on, primitive type): the formats it does not handle yet show
     // up here with how many draws they cost.
@@ -762,8 +844,9 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
 #endif
     gow2_log_main_thread();
     REXLOG_INFO("[gpu] draws: {} geometry, {} sent to the renderer: {} drawn, {} rejected by it; skipped here: "
-                "{} without VS, {} without PS (the renderer logs each rejection cause once)",
-                geometria_, enviados_, dibujados, rechazados, sin_vs_, sin_ps_);
+                "{} without VS, {} without PS (the renderer logs each rejection cause once); {} left out by "
+                "xmow_omitir_ps",
+                geometria_, enviados_, dibujados, rechazados, sin_vs_, sin_ps_, omitidos_ps_);
     if (destinos_) {
       uint64_t q[5];
       destinos_->EstadisticasOclusion(q);
@@ -839,7 +922,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
         opcode != xenos::PM4_SET_SHADER_CONSTANTS) {
       ++packet_trace_n_;
       const uint32_t w0 = count > 0 ? data.Peek() : 0;
-      REXLOG_INFO("[pm4] d{} op {:02X} n {} pred {} sel {:X} mask {:X} w0 {:08X}{}", depth, opcode, count,
+      REXLOG_DEBUG("[pm4] d{} op {:02X} n {} pred {} sel {:X} mask {:X} w0 {:08X}{}", depth, opcode, count,
                   packet & 0x1, bin_select_, bin_mask_, w0,
                   (packet & 0x1) && !(bin_select_ & bin_mask_) ? " SKIPPED" : "");
     }
@@ -869,6 +952,9 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
         // resolved (clears and, once the ring decoder feeds draws, the frame). Handheld 1280x720.
         ++swaps_;
         counter_.fetch_add(1, std::memory_order_relaxed);
+#if defined(__SWITCH__)
+        if (swaps_ % 30 == 1) xmow::gpu_boost::Sondear();  // GPU boost: cvar / dock change re-check (xmow_gpu_boost.cpp)
+#endif
         if (!depth_vs_frame_.empty()) {
           depth_vs_last_.swap(depth_vs_frame_);
           depth_vs_frame_.clear();
@@ -949,6 +1035,9 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
             SaveCapture();
           }
         }
+#if GOW2_DEKO3D
+        ActualizarDiag();  // after FrameTraceSwap and AutomaticCollection: for the frame that starts here
+#endif
         break;
       case xenos::PM4_INDIRECT_BUFFER:
       case xenos::PM4_INDIRECT_BUFFER_PFD: {
@@ -989,6 +1078,11 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
                           (info & 0x10) ? "memory" : "register", poll, reference, mask);
             }
             break;
+          }
+          if (!waited && lector_anillo_) {
+            // xmow_anillo_rptr_rapido: what the ring has read so far goes back before it waits, or a guest waiting for
+            // ring space (while the ring waits for that guest) would only see it after this wait is cut short.
+            PublicarRptr(lector_anillo_->pos);
           }
           waited = true;
           // The first millisecond yielding instead of sleeping: a sleep on Horizon often lasts far longer than asked,
@@ -1188,7 +1282,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
           if (draw_tracing_ && draw_trace_n_ < draw_trace_cap_) {
             namespace g = rex::graphics;
             const uint32_t control = Register(g::XE_GPU_REG_RB_COPY_CONTROL);
-            REXLOG_INFO("[draws]   copy: source {} (c0 {:03X} z {:03X}) pitch {} clear color {} depth {} command {} -> "
+            REXLOG_DEBUG("[draws]   copy: source {} (c0 {:03X} z {:03X}) pitch {} clear color {} depth {} command {} -> "
                         "{:08X} pitch {} height {} format {}",
                         control & 0x7, Register(g::XE_GPU_REG_RB_COLOR_INFO) & 0xFFF,
                         Register(g::XE_GPU_REG_RB_DEPTH_INFO) & 0xFFF,
@@ -1221,6 +1315,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
           microcode_[i] = rex::memory::load_and_swap<uint32_t>(source + size_t(i) * 4);
         }
         ShaderLoaded(type, address_type & ~uint32_t(0x3));
+        if (type == 0) vs_clave_ = 0;  // the VS state is no longer an IM_LOAD_IMMEDIATE's (CargaInmediataCacheada)
         break;
       }
       case xenos::PM4_IM_LOAD_IMMEDIATE: {
@@ -1229,11 +1324,15 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
         const uint32_t type = data.Read() & 0x3;
         const uint32_t words = data.Read() & 0xFFFF;
         if (type > 1 || !words || words > count - 2) break;
+        // xmow_imload_rapido: ~3200 of these a frame in test 22, nearly all repeats.
+        const uint64_t clave = REXCVAR_GET(xmow_imload_rapido) ? ClaveInmediata(data, words) : 0;
+        if (clave && CargaInmediataCacheada(type, clave, data, words)) break;
         microcode_.resize(words);
         for (uint32_t i = 0; i < words; ++i) {
           microcode_[i] = data.Read();
         }
         ShaderLoaded(type, 0);
+        GuardarCargaInmediata(type, clave);
         break;
       }
 #endif
@@ -1306,6 +1405,80 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     const int32_t base = REXCVAR_GET(gow2_edram_base_escena), format = REXCVAR_GET(gow2_formato_escena);
     return (base < 0 || (info & 0xFFF) == uint32_t(base)) && (format < 0 || ((info >> 16) & 0xF) == uint32_t(format));
   }
+  // xmow_ab_ps, read once: the pixel shader numbers of the "_ps" capture and of the detailed log lines.
+  bool EnListaAb(uint32_t numero) {
+    if (!ab_ps_leidos_) {
+      ab_ps_leidos_ = true;
+      LeerListaNumeros(REXCVAR_GET(xmow_ab_ps), ab_ps_);
+      REXLOG_INFO("[gpu] xmow_ab_ps: {} pixel shaders", ab_ps_.size());
+    }
+    return std::find(ab_ps_.begin(), ab_ps_.end(), numero) != ab_ps_.end();
+  }
+  // xmow_omitir_ps: pixel shaders that are never drawn. Read at the first draw and again whenever the cvar changes
+  // (the port menu's HEIGHT FOG row and PORT FIXES / SKIPPED SHADERS change it live, from the input thread): a change
+  // callback bumps a counter, and the list is re-read through the locked registry (GetFlagByName), never with an
+  // unlocked REXCVAR_GET of the std::string while the menu may be writing it.
+  bool EnListaOmitir(uint32_t numero) {
+    static std::atomic<uint32_t> cambios{0};
+    if (!omitir_ps_leidos_) {
+      rex::cvar::RegisterChangeCallback("xmow_omitir_ps", [](std::string_view, std::string_view) {
+        cambios.fetch_add(1, std::memory_order_relaxed);
+      });
+    }
+    const uint32_t version = cambios.load(std::memory_order_relaxed);
+    if (!omitir_ps_leidos_ || version != omitir_ps_version_) {
+      omitir_ps_leidos_ = true;
+      omitir_ps_version_ = version;
+      omitir_ps_.clear();
+      LeerListaNumeros(rex::cvar::GetFlagByName("xmow_omitir_ps"), omitir_ps_);
+      // A bitset by shader number for the per-draw check (numbers above 1 << 20 are not library numbers: ignored).
+      omitir_ps_bits_.clear();
+      for (const uint32_t n : omitir_ps_) {
+        if (n >= (1u << 20)) continue;
+        if (omitir_ps_bits_.size() <= n / 64) omitir_ps_bits_.resize(n / 64 + 1, 0);
+        omitir_ps_bits_[n / 64] |= uint64_t(1) << (n % 64);
+      }
+      REXLOG_INFO("[gpu] xmow_omitir_ps: {} pixel shaders", omitir_ps_.size());
+    }
+    return numero / 64 < omitir_ps_bits_.size() && ((omitir_ps_bits_[numero / 64] >> (numero % 64)) & 1);
+  }
+  static void LeerListaNumeros(const std::string& lista, std::vector<uint32_t>& salida) {
+    uint32_t v = 0;
+    bool hay = false;
+    for (const char c : lista + ",") {
+      if (c >= '0' && c <= '9') {
+        v = v * 10 + uint32_t(c - '0');
+        hay = true;
+      } else if (hay) {
+        salida.push_back(v);
+        v = 0;
+        hay = false;
+      }
+    }
+  }
+
+  // xmow_captura_ab: whether this draw belongs to the group left out for the next capture. Only color draws (mode 4)
+  // with some channel written; 1, 2 and 4 only into a 7e3 target (formats 3 and 12, the scene). Group 4 = additive
+  // translucents (ONE x ONE). The rotation now alternates 5 (translucent alpha blends: SRC_ALPHA x ONE_MINUS_SRC_ALPHA,
+  // suffix "ta") and 6 (the other translucents, suffix "to").
+  bool OmitidoAb() {
+    namespace g = rex::graphics;
+    if ((Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7) != 4) return false;
+    if (ab_grupo_ == 3) return ps_ && ps_->numero == ab_ps_actual_;
+    const uint32_t formato = (Register(g::XE_GPU_REG_RB_COLOR_INFO) >> 16) & 0xF;
+    if (!(Register(g::XE_GPU_REG_RB_COLOR_MASK) & 0xF) || (formato != 3 && formato != 12)) return false;
+    const uint32_t mezcla = Register(g::XE_GPU_REG_RB_BLENDCONTROL0);
+    const uint32_t src = mezcla & 0x1F, dst = (mezcla >> 8) & 0x1F;
+    const bool modulada = src == 8 && dst == 0;   // DST_COLOR x ZERO: the scene times the shadow
+    const bool opaca = src == 1 && dst == 0;      // ONE x ZERO: no blending
+    if (ab_grupo_ == 2) return modulada;
+    if (ab_grupo_ == 4) return src == 1 && dst == 1;
+    const bool alfa = src == 6 && dst == 7;       // SRC_ALPHA x ONE_MINUS_SRC_ALPHA: classic alpha blend
+    if (ab_grupo_ == 5) return !modulada && !opaca && alfa;
+    if (ab_grupo_ == 6) return !modulada && !opaca && !alfa;
+    return !modulada && !opaca;
+  }
+
   bool IsBasePassTargetBase() const {
     const int32_t base = REXCVAR_GET(gow2_edram_base_escena);
     return base < 0 || (Register(rex::graphics::XE_GPU_REG_RB_COLOR_INFO) & 0xFFF) == uint32_t(base);
@@ -1457,6 +1630,56 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     generacion_vs_ = it->second;
   }
 
+  // xmow_imload_rapido. An IM_LOAD_IMMEDIATE's key: the hash of its raw (guest order) words and their count, or 0 when
+  // they wrap around the end of the ring (then the full path). Without a physical address the library's answer
+  // depends only on the microcode (and the same microcode keeps its VS generation), so a load seen before reuses the
+  // answer: no byte swap into microcode_, no library lock, no identification, no generation lookup. Only identified
+  // shaders are kept (the unknown ones still go through the library, which counts and dumps them), and not the Gears
+  // glow shaders (their load logs their fetches).
+  static uint64_t ClaveInmediata(const Reader& data, uint32_t words) {
+    if (data.mask && data.pos + words > data.mask + 1) return 0;
+    const uint64_t h = XXH3_64bits(data.base + size_t(data.pos) * 4, size_t(words) * 4) ^ (uint64_t(words) << 40);
+    return h ? h : 1;
+  }
+
+  bool CargaInmediataCacheada(uint32_t type, uint64_t clave, const Reader& data, uint32_t words) {
+    auto& cache = cargas_inmediatas_[type & 1];
+    const auto it = cache.find(clave);
+    if (it == cache.end()) return false;
+    ++imload_rapidas_;
+    if (type == 1) {
+      ps_ = it->second.entrada;
+      return true;
+    }
+    if (clave == vs_clave_) return true;  // the VS state (vs_, vs_microcode_, generation) is this load's already
+    vs_ = it->second.entrada;
+    vs_physical_ = 0;
+    vs_microcode_.resize(words);  // patched by D3D: the vertex input is read from here (ShaderLoaded)
+    Reader r = data;
+    for (uint32_t i = 0; i < words; ++i) vs_microcode_[i] = r.Read();
+    generacion_vs_ = it->second.generacion;
+    vs_clave_ = clave;
+    return true;
+  }
+
+  // After the full path of an IM_LOAD_IMMEDIATE (ShaderLoaded): its answer for the next time.
+  void GuardarCargaInmediata(uint32_t type, uint64_t clave) {
+    const rex::x360::EntradaShader* entry = type == 0 ? vs_ : ps_;
+    const bool guardar = clave && entry && !(type == 0 && IsGlowShader(entry));
+    if (type == 0) vs_clave_ = guardar ? clave : 0;
+    if (!guardar) return;
+    auto& cache = cargas_inmediatas_[type & 1];
+    if (cache.size() >= 16384) cache.clear();  // bounded; the state of the current VS does not live here
+    cache[clave] = {entry, type == 0 ? generacion_vs_ : 0};
+  }
+
+  // xmow_diag_solo_activo: whether this frame's draws feed the diagnostics (Draw), once per frame at the Swap.
+  // Active with a draw or frame trace, the probe, an A/B capture under way or enabled, or a skip/search mode.
+  void ActualizarDiag() {
+    diag_activo_ = !REXCVAR_GET(xmow_diag_solo_activo) || draw_tracing_ || tracing_ || probing_ || ab_grupo_ != 0 ||
+                   ab_cuenta_ != 0 || REXCVAR_GET(xmow_captura_ab) || skip_mode_ != 0 || capture_after_skip_ != 0;
+  }
+
   void Draw() {
     ++geometria_;
     FrameTraceDraw();
@@ -1567,13 +1790,57 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       ++prepass_skipped_;
       return;
     }
+    // gow2_sin_prepaso_enmascarado (singularity-nx): the masked (alpha-tested) depth prepass, colour+depth mode with
+    // every colour channel masked off and depth writes on into the scene depth (EDRAM 000).
+    if (REXCVAR_GET(gow2_sin_prepaso_enmascarado) && skip_mode_ != 8 && (Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7) == 4 &&
+        (Register(g::XE_GPU_REG_RB_COLOR_MASK) & 0xFFFF) == 0 && (Register(g::XE_GPU_REG_RB_DEPTH_INFO) & 0xFFF) == 0 &&
+        (Register(g::XE_GPU_REG_RB_DEPTHCONTROL) & 0x6) == 0x6) {
+      ++prepass_skipped_;
+      return;
+    }
+    if (ps_ && EnListaOmitir(ps_->numero)) {
+      ++omitidos_ps_;
+      return;
+    }
     if (skip_mode_ > 1 && SkippedByMode()) {
       ++skipped_by_mode_;
       return;
     }
+    // xmow_ab_ps: the first draws of each listed pixel shader with their textures and constants in the log.
+    // (This, the search candidates and the report counters below: only with diag_activo_, ActualizarDiag.)
+    if (diag_activo_ && ps_ && EnListaAb(ps_->numero) && ab_detalles_[ps_->numero]++ < 3) {
+      const uint32_t n = draw_trace_n_, cap = draw_trace_cap_;
+      draw_trace_n_ = 0;
+      draw_trace_cap_ = 1;
+      DrawTraceLine(true, "XMOW detalle (xmow_ab_ps)");
+      draw_trace_n_ = n;
+      draw_trace_cap_ = cap;
+    } else if (diag_activo_ && ps_ && (Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7) == 4 &&
+               (Register(g::XE_GPU_REG_RB_COLOR_MASK) & 0xF) != 0 &&
+               (((Register(g::XE_GPU_REG_RB_COLOR_INFO) >> 16) & 0xF) == 3 ||
+                ((Register(g::XE_GPU_REG_RB_COLOR_INFO) >> 16) & 0xF) == 12) &&
+               (Register(g::XE_GPU_REG_VGT_DRAW_INITIATOR) >> 16) <= 6) {
+      // Full-screen translucent effects (haze, glow): the first draws of each pixel shader, in detail.
+      const uint32_t mezcla = Register(g::XE_GPU_REG_RB_BLENDCONTROL0);
+      const uint32_t src = mezcla & 0x1F, dst = (mezcla >> 8) & 0x1F;
+      if (!(src == 1 && dst == 0) && !(src == 8 && dst == 0) && tela_detalles_[ps_->numero]++ < 3) {
+        const uint32_t n = draw_trace_n_, cap = draw_trace_cap_;
+        draw_trace_n_ = 0;
+        draw_trace_cap_ = 1;
+        DrawTraceLine(true, "XMOW detalle (pantalla translucida)");
+        draw_trace_n_ = n;
+        draw_trace_cap_ = cap;
+      }
+    }
+    if (ab_grupo_ && OmitidoAb()) {
+      ++ab_omitidos_;
+      return;
+    }
     // The search modes' candidates: vertex shaders writing depth while drawing color and depth.
     // (pixel search: the base pass, color into gow2_edram_base_escena / gow2_formato_escena with depth on)
-    if (REXCVAR_GET(gow2_busqueda_ps)) {
+    if (!diag_activo_) {
+      // no search candidates this frame (xmow_diag_solo_activo)
+    } else if (REXCVAR_GET(gow2_busqueda_ps)) {
       if (ps_ && (Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7) == 4 &&
           IsBasePassTarget() && depth_vs_frame_.size() < 256) {
         // Weighted by vertices: the big meshes (the ground) are one or two draws each.
@@ -1610,20 +1877,20 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       if (hide_glow_) return;
     }
     // Diagnostics (Report): formats and primitive types of what is sent.
-    const uint32_t mask = Register(rex::graphics::XE_GPU_REG_RB_COLOR_MASK);
-    static constexpr uint32_t kColorInfo[4] = {
-        rex::graphics::XE_GPU_REG_RB_COLOR_INFO, rex::graphics::XE_GPU_REG_RB_COLOR1_INFO,
-        rex::graphics::XE_GPU_REG_RB_COLOR2_INFO, rex::graphics::XE_GPU_REG_RB_COLOR3_INFO};
-    for (uint32_t i = 0; i < 4 && ps_ && !depth_only; ++i) {
-      if (((mask >> (i * 4)) & 0xF) && ((ps_->salidas >> i) & 0x1)) {
-        ++color_formats_[(Register(kColorInfo[i]) >> 16) & 0xF];
+    if (diag_activo_) {
+      const uint32_t mask = Register(rex::graphics::XE_GPU_REG_RB_COLOR_MASK);
+      static constexpr uint32_t kColorInfo[4] = {
+          rex::graphics::XE_GPU_REG_RB_COLOR_INFO, rex::graphics::XE_GPU_REG_RB_COLOR1_INFO,
+          rex::graphics::XE_GPU_REG_RB_COLOR2_INFO, rex::graphics::XE_GPU_REG_RB_COLOR3_INFO};
+      for (uint32_t i = 0; i < 4 && ps_ && !depth_only; ++i) {
+        if (((mask >> (i * 4)) & 0xF) && ((ps_->salidas >> i) & 0x1)) {
+          ++color_formats_[(Register(kColorInfo[i]) >> 16) & 0xF];
+        }
       }
-    }
-    if (Register(rex::graphics::XE_GPU_REG_RB_DEPTHCONTROL) & 0x6) {  // Z test or Z write
-      ++depth_formats_[(Register(rex::graphics::XE_GPU_REG_RB_DEPTH_INFO) >> 16) & 0x1];
-    }
-    ++primitive_types_[Register(rex::graphics::XE_GPU_REG_VGT_DRAW_INITIATOR) & 0x1F];
-    {
+      if (Register(rex::graphics::XE_GPU_REG_RB_DEPTHCONTROL) & 0x6) {  // Z test or Z write
+        ++depth_formats_[(Register(rex::graphics::XE_GPU_REG_RB_DEPTH_INFO) >> 16) & 0x1];
+      }
+      ++primitive_types_[Register(rex::graphics::XE_GPU_REG_VGT_DRAW_INITIATOR) & 0x1F];
       // Indexed draws by index size and byte order (VGT_DMA_SIZE bits 30-31): 16-bit indices in k8in32 or k16in32
       // were read unswapped by the SDK.
       const uint32_t init = Register(rex::graphics::XE_GPU_REG_VGT_DRAW_INITIATOR);
@@ -2124,9 +2391,35 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     if (first_swap_ == Clock::time_point{}) return;
     const double t = std::chrono::duration<double>(now - first_swap_).count();
     const int32_t every = REXCVAR_GET(gow2_auto_captura_s);
-    if (every > 0 && t >= next_auto_capture_s_) {
+    if (ab_cuenta_) {
+      // xmow_captura_ab: the frame without the group, a few frames after it was left out (then drawn again).
+      if (--ab_cuenta_ == 0) {
+        const std::string sufijo = ab_grupo_ == 3   ? "p" + std::to_string(ab_ps_actual_)
+                                   : ab_grupo_ == 5 ? std::string("ta")
+                                   : ab_grupo_ == 6 ? std::string("to")
+                                                    : std::string("tr");
+        SaveCapture(true, sufijo.c_str());
+        if (auto_captures_ % 12 == 1 || ab_turno_ <= 3) {
+          REXLOG_INFO("[gpu] capture ab: group {} left out ({} draws so far); xmow_omitir_ps: {} draws left out",
+                      sufijo, ab_omitidos_, omitidos_ps_);
+        }
+        ab_grupo_ = 0;
+      }
+    } else if (every > 0 && t >= next_auto_capture_s_) {
       next_auto_capture_s_ = t + every;
       SaveCapture(true);
+      if (REXCVAR_GET(xmow_captura_ab) && last_frame_draws_ >= 300) {
+        ab_grupo_ = (ab_turno_++ % 2) ? 6 : 5;  // alternates alpha-blended (ta) and other translucents (to)
+        if (ab_grupo_ == 3) {
+          EnListaAb(0);
+          if (ab_ps_.empty()) {
+            ab_grupo_ = 1;
+          } else {
+            ab_ps_actual_ = ab_ps_[ab_ps_turno_++ % ab_ps_.size()];
+          }
+        }
+        ab_cuenta_ = 4;
+      }
     }
     const int32_t max_dumps = REXCVAR_GET(gow2_auto_volcados_max);
     if (auto_dumps_ < uint32_t(std::max(max_dumps, 0))) {
@@ -2146,7 +2439,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     }
   }
 
-  void SaveCapture(bool small = false) {
+  void SaveCapture(bool small = false, const char* sufijo = nullptr) {
     rex::ui::RawImage image;
     if (!presenter_ || !presenter_->CaptureGuestOutput(image) || !image.width || !image.height) {
       REXLOG_WARN("[gpu] capture: no guest output to capture");
@@ -2158,7 +2451,12 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     char name[32];
     std::filesystem::path path;
     if (small) {
-      std::snprintf(name, sizeof(name), "auto_%04u.bmp", auto_captures_++);
+      if (sufijo && *sufijo) {
+        // The A/B partner of the last automatic capture: the same number.
+        std::snprintf(name, sizeof(name), "auto_%04u_%s.bmp", auto_captures_ ? auto_captures_ - 1 : 0, sufijo);
+      } else {
+        std::snprintf(name, sizeof(name), "auto_%04u.bmp", auto_captures_++);
+      }
       path = folder / name;
       // Half size: each 2x2 block averaged into the top-left texel, then compacted (0.7 MB instead of 2.7 MB).
       const uint32_t w = image.width / 2, h = image.height / 2;
@@ -2230,7 +2528,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     namespace g = rex::graphics;
     if (draw_trace_n_ >= draw_trace_cap_) return;
     const uint32_t init = Register(g::XE_GPU_REG_VGT_DRAW_INITIATOR);
-    REXLOG_INFO("[draws] {:3} prim {} n {} vs {} ps {} c0 {:03X}/f{} z {:03X} mask {:04X} blend0 {:08X} colorctl {:08X} "
+    REXLOG_DEBUG("[draws] {:3} prim {} n {} vs {} ps {} c0 {:03X}/f{} z {:03X} mask {:04X} blend0 {:08X} colorctl {:08X} "
                 "depthctl {:08X} stencil {:08X} mode {} pitch {} msaa {} -> {}",
                 draw_trace_n_++, init & 0x3F, init >> 16, vs_ ? int(vs_->numero) : -1, ps_ ? int(ps_->numero) : -1,
                 Register(g::XE_GPU_REG_RB_COLOR_INFO) & 0xFFF, (Register(g::XE_GPU_REG_RB_COLOR_INFO) >> 16) & 0xF,
@@ -2249,7 +2547,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     for (size_t i = 0; i + 2 < vs_microcode_.size() && vs_; i += 3) {
       const uint32_t w0 = vs_microcode_[i], w1 = vs_microcode_[i + 1], w2 = vs_microcode_[i + 2];
       if ((w0 & 0x1F) != 0 || !((w0 >> 19) & 1)) continue;
-      REXLOG_INFO("[draws]       vfetch r{} const {}.{} format {} swz {:03X} signed {} int {} stride {} offset {}",
+      REXLOG_DEBUG("[draws]       vfetch r{} const {}.{} format {} swz {:03X} signed {} int {} stride {} offset {}",
                   (w0 >> 12) & 0x3F, (w0 >> 20) & 0x1F, (w0 >> 25) & 3, (w1 >> 16) & 0x3F, w1 & 0xFFF, (w1 >> 12) & 1,
                   (w1 >> 13) & 1, (w2 & 0xFF) * 4, ((w2 >> 8) & 0x7FFFFF) * 4);
     }
@@ -2259,7 +2557,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       const uint32_t reg = ps_->samplers[i].registro;
       if (reg >= 32) continue;
       const uint32_t* f = &registers_[0x4800 + reg * 6];
-      REXLOG_INFO("[draws]       s{} tipo {}: base {:08X} fmt {} {}x{} dim {} swz {:03X} signs {:02X} tiled {} type {} "
+      REXLOG_DEBUG("[draws]       s{} tipo {}: base {:08X} fmt {} {}x{} dim {} swz {:03X} signs {:02X} tiled {} type {} "
                   "words {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                   reg, ps_->samplers[i].tipo, f[1] & 0xFFFFF000u, f[1] & 0x3F, (f[2] & 0x1FFF) + 1,
                   ((f[2] >> 13) & 0x1FFF) + 1, (f[5] >> 9) & 0x3, (f[3] >> 1) & 0xFFF, (f[0] >> 2) & 0xFF,
@@ -2274,7 +2572,18 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
                           std::bit_cast<float>(registers_[r + 1]), std::bit_cast<float>(registers_[r + 2]),
                           std::bit_cast<float>(registers_[r + 3]));
       }
-      REXLOG_INFO("[draws]       ps constants{}", pc);
+      REXLOG_DEBUG("[draws]       ps constants{}", pc);
+    }
+    // The vertex shader's first float constants (transform / fog parameters).
+    if (vs_) {
+      std::string vc;
+      for (uint32_t c = 0; c < 16; ++c) {
+        const uint32_t r = 0x4000 + c * 4;
+        vc += fmt::format(" c{}=({:g} {:g} {:g} {:g})", c, std::bit_cast<float>(registers_[r]),
+                          std::bit_cast<float>(registers_[r + 1]), std::bit_cast<float>(registers_[r + 2]),
+                          std::bit_cast<float>(registers_[r + 3]));
+      }
+      REXLOG_DEBUG("[draws]       vs constants{}", vc);
     }
   }
 
@@ -2341,7 +2650,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   }
 
   void FrameTraceLine(const std::string& line) {
-    if (trace_lines_++ < kTraceMaxLines) REXLOG_INFO("[frame] {}", line);
+    if (trace_lines_++ < kTraceMaxLines) REXLOG_DEBUG("[frame] {}", line);
   }
 
   std::array<uint32_t, 9> FrameTraceKey() const {
@@ -2427,7 +2736,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
                                          .data(),
                                      40);
     if (!resolve_seen_.insert(key).second) return;
-    REXLOG_INFO("[resolve] new: {} base {:03X} f{} pitch {} msaa {} scissor {:08X}-{:08X} window ({},{}) rect "
+    REXLOG_DEBUG("[resolve] new: {} base {:03X} f{} pitch {} msaa {} scissor {:08X}-{:08X} window ({},{}) rect "
                 "({:.0f},{:.0f})-({:.0f},{:.0f})-({:.0f},{:.0f}) -> {:08X} pitch {} height {} fmt {} swap {} control "
                 "{:08X}",
                 source < 4 ? fmt::format("c{}", source) : std::string("depth"), src_info & 0xFFF,
@@ -2482,7 +2791,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     if (queries_logged_ < 48 || draw_tracing_) {
       ++queries_logged_;
       const uint32_t* w = reinterpret_cast<const uint32_t*>(counts);
-      REXLOG_INFO("[query] ZPD at {:08X} ctl {:08X}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} -> {}",
+      REXLOG_DEBUG("[query] ZPD at {:08X} ctl {:08X}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} -> {}",
                   address, Register(rex::graphics::XE_GPU_REG_RB_SAMPLE_COUNT_CTL), w[0], w[1], w[2], w[3], w[4], w[5],
                   w[6], w[7], end ? "end" : "begin: zeroed");
     }
@@ -2613,6 +2922,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   std::condition_variable ring_cv_;
   std::atomic<bool> ring_dormido_{false};  // the ring thread is (about to be) waiting on ring_cv_
   static constexpr uint32_t kRptrPaso = 256;  // words between the read pointer writebacks inside a batch
+  const Reader* lector_anillo_ = nullptr;     // RingLoop's reader during a batch (xmow_anillo_rptr_rapido), else null
   rex::system::object_ref<rex::system::XHostThread> ring_thread_;
   rex::system::object_ref<rex::system::XHostThread> vblank_thread_;
 
@@ -2623,6 +2933,16 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   const rex::x360::EntradaShader* vs_ = nullptr;
   const rex::x360::EntradaShader* ps_ = nullptr;
   std::unordered_map<uint64_t, uint64_t> vs_generations_;
+  // xmow_imload_rapido (CargaInmediataCacheada): per stage (0 VS, 1 PS), raw microcode key -> the library's answer.
+  struct CargaInmediata {
+    const rex::x360::EntradaShader* entrada;
+    uint64_t generacion;  // VS only
+  };
+  std::unordered_map<uint64_t, CargaInmediata> cargas_inmediatas_[2];
+  uint64_t vs_clave_ = 0;        // key of the IM_LOAD_IMMEDIATE the VS state comes from (0: another kind of load)
+  uint64_t imload_rapidas_ = 0;  // loads answered from cargas_inmediatas_ (the 10 s report)
+  bool diag_activo_ = true;      // xmow_diag_solo_activo: per-draw diagnostics this frame (ActualizarDiag)
+  std::vector<uint64_t> omitir_ps_bits_;  // xmow_omitir_ps as a bitset by shader number (EnListaOmitir)
   uint64_t generacion_vs_ = 0, generacion_constantes_vs_ = 0, generacion_constantes_ps_ = 0;
   uint64_t generacion_fetch_ = 0, generacion_encuadre_ = 0;
   uint64_t geometria_ = 0, enviados_ = 0, sin_vs_ = 0, sin_ps_ = 0;
@@ -2686,6 +3006,19 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   uint64_t skipped_broken_vs_ = 0;
   uint64_t prepass_skipped_ = 0;
   uint64_t skipped_by_mode_ = 0;
+  // xmow_captura_ab: the group left out until the next capture (0 = none, 1 translucent, 2 modulated shadows, 3 the
+  // xmow_ab_ps list, 4 additive, 5 alpha-blended translucents "ta", 6 other translucents "to"), the frames until it, whose turn is next, and the list read once.
+  uint32_t ab_grupo_ = 0, ab_cuenta_ = 0, ab_turno_ = 0;
+  uint64_t ab_omitidos_ = 0;
+  bool ab_ps_leidos_ = false;
+  std::vector<uint32_t> ab_ps_;
+  uint32_t ab_ps_turno_ = 0, ab_ps_actual_ = 0;
+  bool omitir_ps_leidos_ = false;
+  uint32_t omitir_ps_version_ = 0;  // EnListaOmitir: change count of xmow_omitir_ps the list was read at
+  std::vector<uint32_t> omitir_ps_;
+  uint64_t omitidos_ps_ = 0;
+  std::unordered_map<uint32_t, uint32_t> ab_detalles_;
+  std::unordered_map<uint32_t, uint32_t> tela_detalles_;
   uint64_t clears_logged_1x_ = 0;
   std::unordered_set<uint64_t> glow_logged_;
   std::unordered_set<uint64_t> unknown_vs_logged_;
