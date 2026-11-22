@@ -1,0 +1,103 @@
+# X-Men Origins: Wolverine (ReXGlue + deko3d, app layer from gears2-nx) 0.1.9-diag. Goes next to XMOW.nro (SD: /switch/XMOW).
+# Keys are the gears2-nx gow2.toml ones (cvar names kept: gow2_*); texts are comments only. Every key below can be
+# removed: the value shown is the default unless it says otherwise ("diag" = turned on for this diagnostic build).
+# Open it through the NSP forwarder (it runs as an application, with the full memory).
+#
+# Files beside the NRO: xmow.toml (this), xmow_shaders.dslib + shadercache_dksh.bin (shader library and DKSH cache),
+# game_root/ (the extracted disc: default.xex and WGame/), cache/ (cache: for the game), logs/ (xmow_NNN.log, logs/rex/),
+# xmow_resolucion.txt (written by the menu), telemetria.flag (turns the telemetry below on), sin_resplandor.flag (no use here).
+# Controls:
+#   + and - together : port menu (video mode; applies at the next start)
+#   L3 + R3          : capture for diagnosis: dump of the next frame (every resolved texture as BMP in volcado_NN/)
+#                      + full draw trace in the log
+# The gears2-nx ZL + ZR shortcuts are all off (switch_atajos_depuracion and switch_atajo_contador_fps = false).
+
+# ---- Logs ----
+# ZL + ZR shortcuts of the SDK off (only + -, and L3 + R3)
+switch_atajos_depuracion = false
+switch_atajo_contador_fps = false
+# diag: the log goes to <NRO folder>/logs/xmow_NNN.log (this SDK always writes it; log_to_file is the old XMOW key, kept).
+log_to_file = true
+log_level = "info"
+
+# ---- Presentation ----
+video_mode_width = 1280
+video_mode_height = 720
+vsync = true
+clock_no_scaling = true
+# diag: frame counter on screen
+switch_contador_fps = true
+# Video mode at start (also set by xmow_resolucion.txt, which wins): 0 or 720 = 1280x720, 540 = 960x540 (EXPERIMENTAL here:
+# only the SDK video_mode is changed, there is no scene patch for this game as there was in gears2-nx).
+# gow2_resolucion = 0
+
+# ---- Storage ----
+# Mount the guest cache: device (UE3 opens "cache:\") on the cache folder next to the NRO (/switch/XMOW/cache), writable.
+cache_device = true
+# Game folder if it is not game_root/ beside the NRO.
+# gow2_game = ""
+
+# ---- Shaders ----
+# The library is read as an index and each shader comes from the card the first time it is used (needed: ~470 MB).
+gow2_shaders_por_demanda = true
+# diag: write the microcode of shaders no step identifies to shaders_unknown/ (up to 2000)
+gow2_volcar_desconocidos = true
+# Write EVERY shader container the game creates through Create{Vertex,Pixel}Shader to shaders_dump/ (containers the
+# library does not have are always written). Heavy on the SD card.
+# gow2_shader_dump = false
+
+# ---- Diagnostics (the telemetry ones act only with telemetria.flag beside the NRO; this candidate has it) ----
+nfsmw_dk_perfil_gpu_s = 20
+# Reduced capture (640x360) to capturas/auto_NNNN.bmp every N s; 0 = never
+gow2_auto_captura_s = 5
+# Dump of the resolved textures of a heavy frame: first at second N, then every M s (0 = only the first), at most K
+gow2_auto_volcado_primero_s = 90
+gow2_auto_volcado_cada_s = 60
+gow2_auto_volcados_max = 3
+gow2_auto_volcado_dibujos = 800
+# Structure trace of a heavy frame every N s, at most M
+gow2_traza_cada_s = 60
+gow2_trazas_max = 20
+# CPU profile sampling the stacks of each thread (a bit slower)
+gow2_perfil_pilas = true
+# ZL+ZR+Right: skip-one-shader search modes (pixel shaders of the base pass; false = vertex shaders)
+gow2_busqueda_ps = true
+gow2_busqueda_directa = true
+# Probe of ZL+ZR+Left: x,y of an 8x8 square
+gow2_sonda = "700,650"
+
+# ---- Game specific settings that are NOT known for Wolverine (all neutral by default) ----
+# Base pass target of the scene, for the search modes and the probe: EDRAM base of color 0 and its color format; -1 = any.
+# (Gears of War 2 used 0x2D0 = 720 and format 3.) Set them once the frame trace shows Wolverine's scene target.
+# gow2_edram_base_escena = -1
+# gow2_formato_escena = -1
+# gow2_formato_luces = -1
+# Skip the depth-only prepass of the scene (Gears needed it: the prepass depth did not match the base pass). Off here: it
+# also drops depth-only draws into EDRAM base 0 that may be Wolverine's shadow maps. Try it if the world comes out black.
+# gow2_sin_prepaso_z = false
+# Shader hash fixes of Gears of War 2 (trees, lamp glows, velocity buffer): meaningless for this game.
+# gow2_ajustes_gears2 = false
+# Hide startup movies (parts of paths separated by commas) with gow2_saltar_logos = true; none known yet.
+# gow2_saltar_logos = false
+# gow2_logos_ocultos = ""
+
+# ---- Occlusion queries (real, counted by the GPU) ----
+# XMOW 0.1.4: off (everything visible) until the depth buffer is right: the real counts hid the hero and the set
+gow2_oclusion_real = false
+gow2_oclusion_espera_ms = 40
+gow2_oclusion_sin_esperar_ms = 8
+# gow2_consultas_siempre_visibles = false
+
+# ---- CPU ----
+# mtmsrd regions as one global mutex (the codegen's way) instead of per-thread state
+# gow2_msr_cerrojo_global = false
+
+# ---- Audio ----
+# audio_mute = false
+# audio_switch_bomba = true
+# audio_switch_tramas_en_cola = 10
+# audio_xma_en_trabajador = 0
+
+# ---- Controls ----
+# input_xbox_layout = false
+# input_vibracion = false

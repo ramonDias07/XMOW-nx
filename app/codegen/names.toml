@@ -1,0 +1,17 @@
+# Nomes das funcoes que o codigo do Switch intercepta (hooks), somados ao manifesto por gerar.ps1 (estilo gears2-nx
+# gow2/codegen/names.toml): tabelas [entrypoint.functions.0xENDERECO] com name = "...".
+# Use nome com prefixo (xmow_...): o SDK exporta stubs __imp__D3DDevice_Create*Shader e um nome sem prefixo faria a
+# funcao do jogo virar o stub.
+#
+# XDK Direct3D (src/gow2_shader_dump.cpp; o CMake so compila esses hooks quando os dois nomes estao aqui).
+# Fonte: estudo de viabilidade (d3d_match.py com o LoS como referencia): as duas com score 1,00, confianca A
+# (margem sobre o 2o lugar). Sitios de chamada: CreateVertexShader 2 (8236D680, 82373910), CreatePixelShader 5 (as mesmas
+# duas funcoes). A UE3 monta a maioria dos objetos de shader a mao + XGRegister*Shader (82B31510 VS / 82B31228 PS, tambem A).
+[entrypoint.functions.0x82B31608]
+name = "xmow_D3DDevice_CreateVertexShader"
+
+[entrypoint.functions.0x82B31260]
+name = "xmow_D3DDevice_CreatePixelShader"
+
+# Nao incluidos de proposito: appOutOfMemory e VirtualAlloc (src/gow2_memory_hooks.cpp, fora do build) nao tem endereco do
+# Wolverine confirmado; os laços de espera de gow2_perf_hooks.cpp idem (ver o TODO la).

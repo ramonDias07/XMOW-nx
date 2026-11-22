@@ -1,0 +1,415 @@
+# X-Men Origins: Wolverine (Title ID 41560816, Unreal Engine 3) - ReXGlue 0.10 config.
+# Entries below are added with evidence comments from gap analysis.
+# The C runtime's setjmp/longjmp (root keys; they must stay outside any table, so they are placed before [functions]).
+# Found by pattern from the CLOS/Mirror of Fate overrides (UE3 uses setjmp for try/catch and Lua-like script errors):
+#   setjmp  0x82E98B20: lis r4; lwz r0,-8536(r4); cmpwi r0,0; mtctr r0; bnectr; mflr r0; mfcr r4; stfd f14,0(r3);
+#           stfd f15,8(r3) ... (only function in the image that saves f14.. into r3); 
+#   longjmp 0x82E98800: mflr; stwu r1,-80(r1); cmpwi r4,0; lwz r0,0x138(r3) (the +20 signature of CLOS longjmp);
+#           bl 0x82E9A6F0 (unwind); lfd f14,0(r7) restores the FPRs; only function in the image that reloads f14/f15 from the buffer
+setjmp_address = 0x82E98B20
+longjmp_address = 0x82E98800
+
+[functions]
+
+# Round 1 (first validation run): direct unconditional branches (tail calls) to addresses that discovery had not
+# assigned to any function ("target not in any function").
+0x82B98968 = { name = "sub_82B98968" }  # tail call b from 0x83261540
+0x82BBF518 = { name = "sub_82BBF518" }  # tail call b from 0x82BBFFF8
+
+# Round 2: code pointers stored in data (vtables / callback tables, scanned in the decrypted image, .rdata/.data)
+# that land in code left unowned by discovery (tools/find_gaps.py + tools/pointer_scan.py). Comment = first reference, ref count.
+0x822ABC00 = { name = "sub_822ABC00" }  # pointer_scan: data pointer at 0x8208C9DC (1 ref)
+0x822C32B0 = { name = "sub_822C32B0" }  # pointer_scan: data pointer at 0x8208CA28 (1 ref)
+0x822CC068 = { name = "sub_822CC068" }  # pointer_scan: data pointer at 0x82094758 (3 refs)
+0x82302F98 = { name = "sub_82302F98" }  # pointer_scan: data pointer at 0x82001148 (10 refs)
+0x82302FA8 = { name = "sub_82302FA8" }  # pointer_scan: data pointer at 0x820A6498 (1 ref)
+0x8231E188 = { name = "sub_8231E188" }  # pointer_scan: data pointer at 0x820AD9F0 (30 refs)
+0x8231FDA8 = { name = "sub_8231FDA8" }  # pointer_scan: data pointer at 0x820ADA64 (27 refs)
+0x82330B48 = { name = "sub_82330B48" }  # pointer_scan: data pointer at 0x820AC198 (39 refs)
+0x82337528 = { name = "sub_82337528" }  # pointer_scan: data pointer at 0x820B0CB8 (2 refs)
+0x82337E30 = { name = "sub_82337E30" }  # pointer_scan: data pointer at 0x820B2E30 (1 ref)
+0x8233C220 = { name = "sub_8233C220" }  # pointer_scan: data pointer at 0x820A64DC (4 refs)
+0x8233FFB8 = { name = "sub_8233FFB8" }  # pointer_scan: data pointer at 0x820B0D88 (2 refs)
+0x8238BA88 = { name = "sub_8238BA88" }  # pointer_scan: data pointer at 0x820C0A3C (1 ref)
+0x8242AF38 = { name = "sub_8242AF38" }  # pointer_scan: data pointer at 0x820EDB34 (1 ref)
+0x8242F9D0 = { name = "sub_8242F9D0" }  # pointer_scan: data pointer at 0x820ECFC0 (33 refs)
+0x824442D8 = { name = "sub_824442D8" }  # pointer_scan: data pointer at 0x820EDB48 (1 ref)
+0x824809D0 = { name = "sub_824809D0" }  # pointer_scan: data pointer at 0x8352E210 (1 ref)
+0x8248FBE0 = { name = "sub_8248FBE0" }  # pointer_scan: data pointer at 0x8352E5A8 (1 ref)
+0x82548748 = { name = "sub_82548748" }  # pointer_scan: data pointer at 0x82108C94 (1 ref)
+0x82596120 = { name = "sub_82596120" }  # pointer_scan: data pointer at 0x82115014 (1 ref)
+0x825CB288 = { name = "sub_825CB288" }  # pointer_scan: data pointer at 0x8211A8C0 (1 ref)
+0x826633D8 = { name = "sub_826633D8" }  # pointer_scan: data pointer at 0x821256E8 (1 ref)
+0x82667EC8 = { name = "sub_82667EC8" }  # pointer_scan: data pointer at 0x82124CA0 (3 refs)
+0x8268EDA8 = { name = "sub_8268EDA8" }  # pointer_scan: data pointer at 0x82129BB0 (1 ref)
+0x8268EDC8 = { name = "sub_8268EDC8" }  # pointer_scan: data pointer at 0x82129BB4 (1 ref)
+0x8268EE88 = { name = "sub_8268EE88" }  # pointer_scan: data pointer at 0x82123B6C (2 refs)
+0x8268EED0 = { name = "sub_8268EED0" }  # pointer_scan: data pointer at 0x82123B80 (2 refs)
+0x826E30E0 = { name = "sub_826E30E0" }  # pointer_scan: data pointer at 0x8213736C (1 ref)
+0x826E3248 = { name = "sub_826E3248" }  # pointer_scan: data pointer at 0x82137398 (1 ref)
+0x82702E20 = { name = "sub_82702E20" }  # pointer_scan: data pointer at 0x82230880 (1 ref)
+0x82707F88 = { name = "sub_82707F88" }  # pointer_scan: data pointer at 0x8213B150 (4 refs)
+0x82773170 = { name = "sub_82773170" }  # pointer_scan: data pointer at 0x82161404 (2 refs)
+0x82822370 = { name = "sub_82822370" }  # pointer_scan: data pointer at 0x820A6788 (22 refs)
+0x828C69F8 = { name = "sub_828C69F8" }  # pointer_scan: data pointer at 0x8219D328 (1 ref)
+0x828E2B40 = { name = "sub_828E2B40" }  # pointer_scan: data pointer at 0x82179ED4 (11 refs)
+0x829197C8 = { name = "sub_829197C8" }  # pointer_scan: data pointer at 0x821C3B90 (1 ref)
+0x82A165A0 = { name = "sub_82A165A0" }  # pointer_scan: data pointer at 0x821E2F98 (4 refs)
+0x82A1B590 = { name = "sub_82A1B590" }  # pointer_scan: data pointer at 0x821E42B0 (2 refs)
+0x82A1B5A0 = { name = "sub_82A1B5A0" }  # pointer_scan: data pointer at 0x821E42A8 (2 refs)
+0x82A2C598 = { name = "sub_82A2C598" }  # pointer_scan: data pointer at 0x821E3634 (1 ref)
+0x82A30428 = { name = "sub_82A30428" }  # pointer_scan: data pointer at 0x821EAE58 (1 ref)
+0x82A30B08 = { name = "sub_82A30B08" }  # pointer_scan: data pointer at 0x821E9D78 (3 refs)
+0x82A31108 = { name = "sub_82A31108" }  # pointer_scan: data pointer at 0x821E9A08 (1 ref)
+0x82A31618 = { name = "sub_82A31618" }  # pointer_scan: data pointer at 0x821EB2D8 (1 ref)
+0x82A3AE40 = { name = "sub_82A3AE40" }  # pointer_scan: data pointer at 0x821E2C2C (1 ref)
+0x82A3AE58 = { name = "sub_82A3AE58" }  # pointer_scan: data pointer at 0x821E2C84 (1 ref)
+0x82A61248 = { name = "sub_82A61248" }  # pointer_scan: data pointer at 0x821FFA20 (1 ref)
+0x82A75D88 = { name = "sub_82A75D88" }  # pointer_scan: data pointer at 0x821D218C (30 refs)
+0x82A77BD0 = { name = "sub_82A77BD0" }  # pointer_scan: data pointer at 0x821D2ACC (29 refs)
+0x82ADE010 = { name = "sub_82ADE010" }  # pointer_scan: data pointer at 0x8222B83C (1 ref)
+0x82AEAEB0 = { name = "sub_82AEAEB0" }  # pointer_scan: data pointer at 0x82233648 (1 ref)
+0x82B25BC8 = { name = "sub_82B25BC8" }  # pointer_scan: data pointer at 0x820942C0 (7 refs)
+0x82B55160 = { name = "sub_82B55160" }  # pointer_scan: data pointer at 0x8223CD40 (1 ref)
+0x82B56048 = { name = "sub_82B56048" }  # pointer_scan: data pointer at 0x8223CE0C (2 refs)
+0x82B62510 = { name = "sub_82B62510" }  # pointer_scan: data pointer at 0x8223D0CC (2 refs)
+0x82B62518 = { name = "sub_82B62518" }  # pointer_scan: data pointer at 0x8223D0B8 (1 ref)
+0x82B62558 = { name = "sub_82B62558" }  # pointer_scan: data pointer at 0x8223D0A0 (2 refs)
+0x82B62560 = { name = "sub_82B62560" }  # pointer_scan: data pointer at 0x8223CD44 (8 refs)
+0x82B62568 = { name = "sub_82B62568" }  # pointer_scan: data pointer at 0x8223D0D4 (1 ref)
+0x82B63600 = { name = "sub_82B63600" }  # pointer_scan: data pointer at 0x8223D0EC (2 refs)
+0x82B63618 = { name = "sub_82B63618" }  # pointer_scan: data pointer at 0x8223D1F8 (1 ref)
+0x82B63630 = { name = "sub_82B63630" }  # pointer_scan: data pointer at 0x8223D09C (2 refs)
+0x82B63638 = { name = "sub_82B63638" }  # pointer_scan: data pointer at 0x8223D200 (1 ref)
+0x82B63660 = { name = "sub_82B63660" }  # pointer_scan: data pointer at 0x8223D1E4 (1 ref)
+0x82B63670 = { name = "sub_82B63670" }  # pointer_scan: data pointer at 0x8223D1B8 (1 ref)
+0x82B64798 = { name = "sub_82B64798" }  # pointer_scan: data pointer at 0x8223CE90 (5 refs)
+0x82B647E0 = { name = "sub_82B647E0" }  # pointer_scan: data pointer at 0x8223CE84 (5 refs)
+0x82B7C8C8 = { name = "sub_82B7C8C8" }  # pointer_scan: data pointer at 0x82000894 (1 ref)
+0x82BDAFA8 = { name = "sub_82BDAFA8" }  # pointer_scan: data pointer at 0x82002084 (2 refs)
+0x82BDF6C0 = { name = "sub_82BDF6C0" }  # pointer_scan: data pointer at 0x82000B3C (1 ref)
+0x82BEB848 = { name = "sub_82BEB848" }  # pointer_scan: data pointer at 0x820025DC (1 ref)
+0x82C1C408 = { name = "sub_82C1C408" }  # pointer_scan: data pointer at 0x82003054 (8 refs)
+0x82C4431C = { name = "sub_82C4431C" }  # pointer_scan: data pointer at 0x8223E970 (1 ref)
+0x82C4432C = { name = "sub_82C4432C" }  # pointer_scan: data pointer at 0x8223E978 (1 ref)
+0x82C44338 = { name = "sub_82C44338" }  # pointer_scan: data pointer at 0x8223E980 (1 ref)
+0x82C816F0 = { name = "sub_82C816F0" }  # pointer_scan: data pointer at 0x8200C524 (1 ref)
+0x82C81840 = { name = "sub_82C81840" }  # pointer_scan: data pointer at 0x8200C530 (1 ref)
+0x82C818C8 = { name = "sub_82C818C8" }  # pointer_scan: data pointer at 0x8200C52C (1 ref)
+0x82CE36B0 = { name = "sub_82CE36B0" }  # pointer_scan: data pointer at 0x820135E8 (3 refs)
+0x82CE3738 = { name = "sub_82CE3738" }  # pointer_scan: data pointer at 0x820137AC (3 refs)
+0x82CE3760 = { name = "sub_82CE3760" }  # pointer_scan: data pointer at 0x820137B0 (3 refs)
+0x82CE3788 = { name = "sub_82CE3788" }  # pointer_scan: data pointer at 0x820137B4 (3 refs)
+0x82CE37B0 = { name = "sub_82CE37B0" }  # pointer_scan: data pointer at 0x820137B8 (3 refs)
+0x82CE3BE0 = { name = "sub_82CE3BE0" }  # pointer_scan: data pointer at 0x820137EC (2 refs)
+0x82D64D30 = { name = "sub_82D64D30" }  # pointer_scan: data pointer at 0x8203D8C4 (1 ref)
+0x82D64D48 = { name = "sub_82D64D48" }  # pointer_scan: data pointer at 0x8203D8C8 (1 ref)
+0x82D99780 = { name = "sub_82D99780" }  # pointer_scan: data pointer at 0x8203F128 (1 ref)
+0x82DA0C68 = { name = "sub_82DA0C68" }  # pointer_scan: data pointer at 0x8203F46C (6 refs)
+0x82DA77E0 = { name = "sub_82DA77E0" }  # pointer_scan: data pointer at 0x8203FDC8 (1 ref)
+0x82DA78A0 = { name = "sub_82DA78A0" }  # pointer_scan: data pointer at 0x8203FDD0 (1 ref)
+0x82DA78B8 = { name = "sub_82DA78B8" }  # pointer_scan: data pointer at 0x8203FDD4 (1 ref)
+0x82DB0D10 = { name = "sub_82DB0D10" }  # pointer_scan: data pointer at 0x82040508 (5 refs)
+0x82DB0DE8 = { name = "sub_82DB0DE8" }  # pointer_scan: data pointer at 0x82040554 (5 refs)
+0x82DB14B8 = { name = "sub_82DB14B8" }  # pointer_scan: data pointer at 0x820419B4 (1 ref)
+0x82DBE078 = { name = "sub_82DBE078" }  # pointer_scan: data pointer at 0x82040EF0 (1 ref)
+0x82DEDB20 = { name = "sub_82DEDB20" }  # pointer_scan: data pointer at 0x820428B8 (1 ref)
+0x82DF4DD0 = { name = "sub_82DF4DD0" }  # pointer_scan: data pointer at 0x82042D18 (1 ref)
+0x82DF4DE8 = { name = "sub_82DF4DE8" }  # pointer_scan: data pointer at 0x82042D00 (1 ref)
+0x82DF4E00 = { name = "sub_82DF4E00" }  # pointer_scan: data pointer at 0x82042D1C (1 ref)
+0x82DF4E18 = { name = "sub_82DF4E18" }  # pointer_scan: data pointer at 0x82042D04 (1 ref)
+0x82DF4E30 = { name = "sub_82DF4E30" }  # pointer_scan: data pointer at 0x82042D08 (1 ref)
+0x82DF4E48 = { name = "sub_82DF4E48" }  # pointer_scan: data pointer at 0x82042D0C (1 ref)
+0x82DF4E60 = { name = "sub_82DF4E60" }  # pointer_scan: data pointer at 0x82042D10 (1 ref)
+0x82DF4E78 = { name = "sub_82DF4E78" }  # pointer_scan: data pointer at 0x82042D14 (1 ref)
+0x82E0C150 = { name = "sub_82E0C150" }  # pointer_scan: data pointer at 0x820441A0 (1 ref)
+0x82E133B8 = { name = "sub_82E133B8" }  # pointer_scan: data pointer at 0x8204464C (1 ref)
+0x82E1F208 = { name = "sub_82E1F208" }  # pointer_scan: data pointer at 0x82044D64 (1 ref)
+0x82E23B20 = { name = "sub_82E23B20" }  # pointer_scan: data pointer at 0x82045284 (2 refs)
+0x82E268A8 = { name = "sub_82E268A8" }  # pointer_scan: data pointer at 0x820453F0 (1 ref)
+0x82E2D6B8 = { name = "sub_82E2D6B8" }  # pointer_scan: data pointer at 0x82045740 (1 ref)
+0x82E9B848 = { name = "sub_82E9B848" }  # pointer_scan: data pointer at 0x82049FE0 (3 refs)
+0x82EC3F00 = { name = "sub_82EC3F00" }  # pointer_scan: data pointer at 0x8204B098 (1 ref)
+0x82EC3F60 = { name = "sub_82EC3F60" }  # pointer_scan: data pointer at 0x8204B0B8 (1 ref)
+0x82EC3F90 = { name = "sub_82EC3F90" }  # pointer_scan: data pointer at 0x8204B0C8 (1 ref)
+0x82EC3FB8 = { name = "sub_82EC3FB8" }  # pointer_scan: data pointer at 0x8204B0F0 (1 ref)
+0x82EC3FC0 = { name = "sub_82EC3FC0" }  # pointer_scan: data pointer at 0x8204B0F4 (1 ref)
+0x82EC3FC8 = { name = "sub_82EC3FC8" }  # pointer_scan: data pointer at 0x8204B0F8 (1 ref)
+0x82EC3FD8 = { name = "sub_82EC3FD8" }  # pointer_scan: data pointer at 0x8204B0FC (1 ref)
+0x82EC3FE8 = { name = "sub_82EC3FE8" }  # pointer_scan: data pointer at 0x8204B100 (1 ref)
+0x82EC3FF8 = { name = "sub_82EC3FF8" }  # pointer_scan: data pointer at 0x8204B104 (1 ref)
+0x82EC4008 = { name = "sub_82EC4008" }  # pointer_scan: data pointer at 0x8204B108 (1 ref)
+0x82EC4018 = { name = "sub_82EC4018" }  # pointer_scan: data pointer at 0x8204B10C (1 ref)
+0x82EC4028 = { name = "sub_82EC4028" }  # pointer_scan: data pointer at 0x8204B110 (1 ref)
+0x82EC4038 = { name = "sub_82EC4038" }  # pointer_scan: data pointer at 0x8204B114 (1 ref)
+0x82EC4048 = { name = "sub_82EC4048" }  # pointer_scan: data pointer at 0x8204B118 (1 ref)
+0x82EC4088 = { name = "sub_82EC4088" }  # pointer_scan: data pointer at 0x8204B12C (1 ref)
+0x82EC4090 = { name = "sub_82EC4090" }  # pointer_scan: data pointer at 0x8204B130 (1 ref)
+0x82EC4098 = { name = "sub_82EC4098" }  # pointer_scan: data pointer at 0x8204B134 (1 ref)
+0x82EC40A0 = { name = "sub_82EC40A0" }  # pointer_scan: data pointer at 0x8204B138 (1 ref)
+0x82EC40C8 = { name = "sub_82EC40C8" }  # pointer_scan: data pointer at 0x8204B14C (1 ref)
+0x82EC4118 = { name = "sub_82EC4118" }  # pointer_scan: data pointer at 0x8204B15C (1 ref)
+0x82EC4130 = { name = "sub_82EC4130" }  # pointer_scan: data pointer at 0x8204B160 (1 ref)
+0x82EC4168 = { name = "sub_82EC4168" }  # pointer_scan: data pointer at 0x8204B168 (1 ref)
+0x82EC4198 = { name = "sub_82EC4198" }  # pointer_scan: data pointer at 0x8204B170 (1 ref)
+0x82EC41B0 = { name = "sub_82EC41B0" }  # pointer_scan: data pointer at 0x8204B174 (1 ref)
+0x82EC41C8 = { name = "sub_82EC41C8" }  # pointer_scan: data pointer at 0x8204B178 (1 ref)
+0x82EC4200 = { name = "sub_82EC4200" }  # pointer_scan: data pointer at 0x8204B180 (1 ref)
+0x82EC4218 = { name = "sub_82EC4218" }  # pointer_scan: data pointer at 0x8204B184 (1 ref)
+0x82EC42C8 = { name = "sub_82EC42C8" }  # pointer_scan: data pointer at 0x8204B198 (1 ref)
+0x82EC9E48 = { name = "sub_82EC9E48" }  # pointer_scan: data pointer at 0x8204BC3C (1 ref)
+0x82EFF478 = { name = "sub_82EFF478" }  # pointer_scan: data pointer at 0x8204E20C (1 ref)
+0x82F62470 = { name = "sub_82F62470" }  # pointer_scan: data pointer at 0x8205971C (1 ref)
+0x82F62E10 = { name = "sub_82F62E10" }  # pointer_scan: data pointer at 0x820598E8 (1 ref)
+0x82F62E18 = { name = "sub_82F62E18" }  # pointer_scan: data pointer at 0x820596F0 (1 ref)
+0x82F63448 = { name = "sub_82F63448" }  # pointer_scan: data pointer at 0x820598FC (1 ref)
+0x82F83938 = { name = "sub_82F83938" }  # pointer_scan: data pointer at 0x8205A038 (1 ref)
+0x82F83940 = { name = "sub_82F83940" }  # pointer_scan: data pointer at 0x8205A044 (1 ref)
+0x82F83948 = { name = "sub_82F83948" }  # pointer_scan: data pointer at 0x8205A1B8 (1 ref)
+0x82F877C8 = { name = "sub_82F877C8" }  # pointer_scan: data pointer at 0x8205A5DC (9 refs)
+0x82F877E0 = { name = "sub_82F877E0" }  # pointer_scan: data pointer at 0x8205A5E8 (9 refs)
+0x82F877F8 = { name = "sub_82F877F8" }  # pointer_scan: data pointer at 0x8205A5E0 (9 refs)
+0x82F87810 = { name = "sub_82F87810" }  # pointer_scan: data pointer at 0x8205A5E4 (9 refs)
+0x82FA8208 = { name = "sub_82FA8208" }  # pointer_scan: data pointer at 0x8205D42C (1 ref)
+0x82FB5D58 = { name = "sub_82FB5D58" }  # pointer_scan: data pointer at 0x8205DDAC (11 refs)
+0x82FB64E8 = { name = "sub_82FB64E8" }  # pointer_scan: data pointer at 0x8205DDD8 (11 refs)
+0x82FE0C70 = { name = "sub_82FE0C70" }  # pointer_scan: data pointer at 0x8205F554 (1 ref)
+0x82FE93C0 = { name = "sub_82FE93C0" }  # pointer_scan: data pointer at 0x820604F8 (1 ref)
+0x82FE9420 = { name = "sub_82FE9420" }  # pointer_scan: data pointer at 0x82060500 (1 ref)
+0x82FEE2C8 = { name = "sub_82FEE2C8" }  # pointer_scan: data pointer at 0x82060B00 (1 ref)
+0x82FF0810 = { name = "sub_82FF0810" }  # pointer_scan: data pointer at 0x82060DB8 (1 ref)
+0x82FF0830 = { name = "sub_82FF0830" }  # pointer_scan: data pointer at 0x82060DBC (1 ref)
+0x82FF0978 = { name = "sub_82FF0978" }  # pointer_scan: data pointer at 0x82060DD4 (1 ref)
+0x82FF09A8 = { name = "sub_82FF09A8" }  # pointer_scan: data pointer at 0x82060DD8 (1 ref)
+0x82FF09D8 = { name = "sub_82FF09D8" }  # pointer_scan: data pointer at 0x82060D38 (1 ref)
+0x83030EA0 = { name = "sub_83030EA0" }  # pointer_scan: data pointer at 0x820616E0 (3 refs)
+0x8306EE80 = { name = "sub_8306EE80" }  # pointer_scan: data pointer at 0x82062B08 (1 ref)
+0x8306EE88 = { name = "sub_8306EE88" }  # pointer_scan: data pointer at 0x82062B0C (1 ref)
+0x8306EE90 = { name = "sub_8306EE90" }  # pointer_scan: data pointer at 0x82062B2C (1 ref)
+0x831A24E0 = { name = "sub_831A24E0" }  # pointer_scan: data pointer at 0x8206D5F0 (2 refs)
+0x831A2530 = { name = "sub_831A2530" }  # pointer_scan: data pointer at 0x8206D5F8 (1 ref)
+0x831DCBB8 = { name = "sub_831DCBB8" }  # pointer_scan: data pointer at 0x820727CC (13 refs)
+
+
+# Round 3 (scratch gap classification): branch target left outside any function once the gaps around it were declared.
+0x8253A79C = { name = "sub_8253A79C" }  # tail call b from 0x8253A7C8 (gap scan)
+
+# Round 4: structural gap scan (tools/find_gaps.py gaps of 4..1024 bytes with non-padding content, scratch codegen,
+# tools/gap_classify.py tier 1 + gap_fixpoint acceptance: complete self-contained leaf/thunk, ends in blr/bctr/b, no r1/LR use, no
+# registers undefined at entry). Comment = instruction count and shape.
+0x822A0DC8 = { name = "sub_822A0DC8" }  # gap_classify: blr in 8-byte gap
+0x822AB278 = { name = "sub_822AB278" }  # gap_classify: blr in 8-byte gap
+0x822C6074 = { name = "sub_822C6074" }  # gap_classify: blr in 4-byte gap
+0x822D0184 = { name = "sub_822D0184" }  # gap_classify: blr in 4-byte gap
+0x822F15E4 = { name = "sub_822F15E4" }  # gap_classify: blr in 4-byte gap
+0x822F9A68 = { name = "sub_822F9A68" }  # gap_classify: blr in 8-byte gap
+0x8232253C = { name = "sub_8232253C" }  # gap_classify: blr in 4-byte gap
+0x8232743C = { name = "sub_8232743C" }  # gap_classify: blr in 4-byte gap
+0x82333F68 = { name = "sub_82333F68" }  # gap_classify: blr in 8-byte gap
+0x82337E18 = { name = "sub_82337E18" }  # gap_classify: blr in 8-byte gap
+0x82337E74 = { name = "sub_82337E74" }  # gap_classify: blr in 4-byte gap
+0x8233D5D0 = { name = "sub_8233D5D0" }  # gap_classify: 33 insns, ends blr in 136-byte gap
+0x8235EA8C = { name = "sub_8235EA8C" }  # gap_classify: blr in 4-byte gap
+0x82370044 = { name = "sub_82370044" }  # gap_classify: blr in 4-byte gap
+0x82374FB4 = { name = "sub_82374FB4" }  # gap_classify: 3 insns, ends blr in 52-byte gap
+0x824295BC = { name = "sub_824295BC" }  # gap_classify: blr in 4-byte gap
+0x82429EF0 = { name = "sub_82429EF0" }  # gap_classify: blr in 8-byte gap
+0x8242B588 = { name = "sub_8242B588" }  # gap_classify: blr in 8-byte gap
+0x82433D48 = { name = "sub_82433D48" }  # gap_classify: blr in 8-byte gap
+0x824340A8 = { name = "sub_824340A8" }  # gap_classify: blr in 8-byte gap
+0x824343A8 = { name = "sub_824343A8" }  # gap_classify: blr in 8-byte gap
+0x82439060 = { name = "sub_82439060" }  # gap_classify: blr in 8-byte gap
+0x82439464 = { name = "sub_82439464" }  # gap_classify: blr in 4-byte gap
+0x8243958C = { name = "sub_8243958C" }  # gap_classify: blr in 4-byte gap
+0x824442C8 = { name = "sub_824442C8" }  # gap_classify: 4 insns, ends bctr in 16-byte gap
+0x8246F5C8 = { name = "sub_8246F5C8" }  # gap_classify: blr in 8-byte gap
+0x82478254 = { name = "sub_82478254" }  # gap_classify: blr in 4-byte gap
+0x824B182C = { name = "sub_824B182C" }  # gap_classify: blr in 4-byte gap
+0x824BA810 = { name = "sub_824BA810" }  # gap_classify: blr in 8-byte gap
+0x824E695C = { name = "sub_824E695C" }  # gap_classify: blr in 4-byte gap
+0x824FD134 = { name = "sub_824FD134" }  # gap_classify: blr in 4-byte gap
+0x82503630 = { name = "sub_82503630" }  # gap_classify: blr in 8-byte gap
+0x825142C4 = { name = "sub_825142C4" }  # gap_classify: blr in 4-byte gap
+0x8251883C = { name = "sub_8251883C" }  # gap_classify: blr in 4-byte gap
+0x8251B200 = { name = "sub_8251B200" }  # gap_classify: blr in 8-byte gap
+0x82522734 = { name = "sub_82522734" }  # gap_classify: blr in 4-byte gap
+0x82524484 = { name = "sub_82524484" }  # gap_classify: blr in 4-byte gap
+0x82524BFC = { name = "sub_82524BFC" }  # gap_classify: blr in 4-byte gap
+0x82524D18 = { name = "sub_82524D18" }  # gap_classify: blr in 8-byte gap
+0x82528AF8 = { name = "sub_82528AF8" }  # gap_classify: blr in 8-byte gap
+0x82529630 = { name = "sub_82529630" }  # gap_classify: blr in 8-byte gap
+0x82529D48 = { name = "sub_82529D48" }  # gap_classify: blr in 8-byte gap
+0x8252BAB4 = { name = "sub_8252BAB4" }  # gap_classify: blr in 4-byte gap
+0x8252D024 = { name = "sub_8252D024" }  # gap_classify: blr in 4-byte gap
+0x8252D0B4 = { name = "sub_8252D0B4" }  # gap_classify: blr in 4-byte gap
+0x8252D7AC = { name = "sub_8252D7AC" }  # gap_classify: blr in 4-byte gap
+0x82534ED0 = { name = "sub_82534ED0" }  # gap_classify: blr in 8-byte gap
+0x82534F50 = { name = "sub_82534F50" }  # gap_classify: blr in 8-byte gap
+0x8253525C = { name = "sub_8253525C" }  # gap_classify: blr in 4-byte gap
+0x82535994 = { name = "sub_82535994" }  # gap_classify: 2 insns, ends blr in 20-byte gap
+0x82539160 = { name = "sub_82539160" }  # gap_classify: blr in 8-byte gap
+0x82539FD4 = { name = "sub_82539FD4" }  # gap_classify: blr in 4-byte gap
+0x8253F8A8 = { name = "sub_8253F8A8" }  # gap_classify: blr in 8-byte gap
+0x8253FE2C = { name = "sub_8253FE2C" }  # gap_classify: blr in 4-byte gap
+0x82540074 = { name = "sub_82540074" }  # gap_classify: blr in 4-byte gap
+0x82540344 = { name = "sub_82540344" }  # gap_classify: blr in 4-byte gap
+0x8254044C = { name = "sub_8254044C" }  # gap_classify: blr in 4-byte gap
+0x825411A8 = { name = "sub_825411A8" }  # gap_classify: blr in 8-byte gap
+0x82547C5C = { name = "sub_82547C5C" }  # gap_classify: blr in 4-byte gap
+0x8257EE88 = { name = "sub_8257EE88" }  # gap_classify: blr in 8-byte gap
+0x8257EF58 = { name = "sub_8257EF58" }  # gap_classify: blr in 8-byte gap
+0x825B32CC = { name = "sub_825B32CC" }  # gap_classify: blr in 4-byte gap
+0x825B44B4 = { name = "sub_825B44B4" }  # gap_classify: blr in 4-byte gap
+0x825CB2DC = { name = "sub_825CB2DC" }  # gap_classify: blr in 4-byte gap
+0x825E3550 = { name = "sub_825E3550" }  # gap_classify: blr in 8-byte gap
+0x825FB57C = { name = "sub_825FB57C" }  # gap_classify: blr in 4-byte gap
+0x8260F8DC = { name = "sub_8260F8DC" }  # gap_classify: blr in 4-byte gap
+0x8263AAC4 = { name = "sub_8263AAC4" }  # gap_classify: blr in 4-byte gap
+0x826469F8 = { name = "sub_826469F8" }  # gap_classify: blr in 8-byte gap
+0x8264D138 = { name = "sub_8264D138" }  # gap_classify: blr in 8-byte gap
+0x826575E4 = { name = "sub_826575E4" }  # gap_classify: blr in 4-byte gap
+0x8265761C = { name = "sub_8265761C" }  # gap_classify: blr in 4-byte gap
+0x82657640 = { name = "sub_82657640" }  # gap_classify: blr in 8-byte gap
+0x82680D68 = { name = "sub_82680D68" }  # gap_classify: 29 insns, ends blr in 120-byte gap
+0x826905C0 = { name = "sub_826905C0" }  # gap_classify: blr in 8-byte gap
+0x82691EF4 = { name = "sub_82691EF4" }  # gap_classify: blr in 4-byte gap
+0x826AB304 = { name = "sub_826AB304" }  # gap_classify: blr in 4-byte gap
+0x826BF1F8 = { name = "sub_826BF1F8" }  # gap_classify: blr in 8-byte gap
+0x826D072C = { name = "sub_826D072C" }  # gap_classify: blr in 4-byte gap
+0x826D13C0 = { name = "sub_826D13C0" }  # gap_classify: blr in 8-byte gap
+0x826D6960 = { name = "sub_826D6960" }  # gap_classify: blr in 8-byte gap
+0x8272B640 = { name = "sub_8272B640" }  # gap_classify: blr in 8-byte gap
+0x82760174 = { name = "sub_82760174" }  # gap_classify: blr in 4-byte gap
+0x8276073C = { name = "sub_8276073C" }  # gap_classify: blr in 4-byte gap
+0x82770BD0 = { name = "sub_82770BD0" }  # gap_classify: blr in 8-byte gap
+0x82776368 = { name = "sub_82776368" }  # gap_classify: blr in 8-byte gap
+0x827850C8 = { name = "sub_827850C8" }  # gap_classify: blr in 8-byte gap
+0x8278DB7C = { name = "sub_8278DB7C" }  # gap_classify: blr in 4-byte gap
+0x8278DC34 = { name = "sub_8278DC34" }  # gap_classify: blr in 4-byte gap
+0x8278DDAC = { name = "sub_8278DDAC" }  # gap_classify: blr in 4-byte gap
+0x827A2A48 = { name = "sub_827A2A48" }  # gap_classify: blr in 8-byte gap
+0x827A370C = { name = "sub_827A370C" }  # gap_classify: blr in 4-byte gap
+0x827BBA68 = { name = "sub_827BBA68" }  # gap_classify: blr in 8-byte gap
+0x827BCA78 = { name = "sub_827BCA78" }  # gap_classify: blr in 8-byte gap
+0x827C1788 = { name = "sub_827C1788" }  # gap_classify: blr in 8-byte gap
+0x827CA838 = { name = "sub_827CA838" }  # gap_classify: blr in 8-byte gap
+0x827CB4E4 = { name = "sub_827CB4E4" }  # gap_classify: blr in 4-byte gap
+0x8282F684 = { name = "sub_8282F684" }  # gap_classify: blr in 4-byte gap
+0x828470A8 = { name = "sub_828470A8" }  # gap_classify: blr in 8-byte gap
+0x82849DD8 = { name = "sub_82849DD8" }  # gap_classify: blr in 8-byte gap
+0x82849E28 = { name = "sub_82849E28" }  # gap_classify: blr in 8-byte gap
+0x82849E70 = { name = "sub_82849E70" }  # gap_classify: blr in 8-byte gap
+0x8287C17C = { name = "sub_8287C17C" }  # gap_classify: blr in 60-byte gap
+0x828BD5B8 = { name = "sub_828BD5B8" }  # gap_classify: blr in 8-byte gap
+0x828F4E94 = { name = "sub_828F4E94" }  # gap_classify: blr in 4-byte gap
+0x828F7400 = { name = "sub_828F7400" }  # gap_classify: 13 insns, ends bctr in 56-byte gap
+0x828F7458 = { name = "sub_828F7458" }  # gap_classify: blr in 8-byte gap
+0x828F7B60 = { name = "sub_828F7B60" }  # gap_classify: blr in 8-byte gap
+0x82979570 = { name = "sub_82979570" }  # gap_classify: blr in 8-byte gap
+0x829BDCAC = { name = "sub_829BDCAC" }  # gap_classify: blr in 4-byte gap
+0x829CB87C = { name = "sub_829CB87C" }  # gap_classify: blr in 4-byte gap
+0x829FBBC4 = { name = "sub_829FBBC4" }  # gap_classify: blr in 4-byte gap
+0x82A094A4 = { name = "sub_82A094A4" }  # gap_classify: blr in 4-byte gap
+0x82A0E908 = { name = "sub_82A0E908" }  # gap_classify: blr in 8-byte gap
+0x82A1B154 = { name = "sub_82A1B154" }  # gap_classify: blr in 4-byte gap
+0x82A20C58 = { name = "sub_82A20C58" }  # gap_classify: blr in 8-byte gap
+0x82A21364 = { name = "sub_82A21364" }  # gap_classify: blr in 4-byte gap
+0x82A215A8 = { name = "sub_82A215A8" }  # gap_classify: blr in 8-byte gap
+0x82A215C8 = { name = "sub_82A215C8" }  # gap_classify: blr in 8-byte gap
+0x82A22298 = { name = "sub_82A22298" }  # gap_classify: blr in 8-byte gap
+0x82A23E08 = { name = "sub_82A23E08" }  # gap_classify: blr in 8-byte gap
+0x82A27D4C = { name = "sub_82A27D4C" }  # gap_classify: blr in 4-byte gap
+0x82A27D74 = { name = "sub_82A27D74" }  # gap_classify: blr in 4-byte gap
+0x82A2D384 = { name = "sub_82A2D384" }  # gap_classify: blr in 4-byte gap
+0x82A37F90 = { name = "sub_82A37F90" }  # gap_classify: blr in 8-byte gap
+0x82A382CC = { name = "sub_82A382CC" }  # gap_classify: blr in 4-byte gap
+0x82A38304 = { name = "sub_82A38304" }  # gap_classify: blr in 4-byte gap
+0x82A3833C = { name = "sub_82A3833C" }  # gap_classify: blr in 4-byte gap
+0x82A6070C = { name = "sub_82A6070C" }  # gap_classify: blr in 4-byte gap
+0x82A62860 = { name = "sub_82A62860" }  # gap_classify: blr in 8-byte gap
+0x82A79640 = { name = "sub_82A79640" }  # gap_classify: blr in 8-byte gap
+0x82A9F78C = { name = "sub_82A9F78C" }  # gap_classify: blr in 4-byte gap
+0x82AE8120 = { name = "sub_82AE8120" }  # gap_classify: blr in 8-byte gap
+0x82AEAB64 = { name = "sub_82AEAB64" }  # gap_classify: blr in 4-byte gap
+0x82AEAED0 = { name = "sub_82AEAED0" }  # gap_classify: blr in 8-byte gap
+0x82AF5434 = { name = "sub_82AF5434" }  # gap_classify: blr in 4-byte gap
+0x82B06DC8 = { name = "sub_82B06DC8" }  # gap_classify: blr in 8-byte gap
+0x82B06E00 = { name = "sub_82B06E00" }  # gap_classify: blr in 8-byte gap
+0x82B06E38 = { name = "sub_82B06E38" }  # gap_classify: blr in 8-byte gap
+0x82B06EE8 = { name = "sub_82B06EE8" }  # gap_classify: blr in 8-byte gap
+0x82B13FA0 = { name = "sub_82B13FA0" }  # gap_classify: blr in 8-byte gap
+0x82B18AF0 = { name = "sub_82B18AF0" }  # gap_classify: blr in 8-byte gap
+0x82B21100 = { name = "sub_82B21100" }  # gap_classify: blr in 8-byte gap
+0x82B21370 = { name = "sub_82B21370" }  # gap_classify: blr in 8-byte gap
+0x82B25498 = { name = "sub_82B25498" }  # gap_classify: blr in 8-byte gap
+0x82B27430 = { name = "sub_82B27430" }  # gap_classify: blr in 8-byte gap
+0x82B27588 = { name = "sub_82B27588" }  # gap_classify: blr in 8-byte gap
+0x82B275B4 = { name = "sub_82B275B4" }  # gap_classify: blr in 4-byte gap
+0x82B54A44 = { name = "sub_82B54A44" }  # gap_classify: blr in 4-byte gap
+0x82B92AF8 = { name = "sub_82B92AF8" }  # gap_classify: blr in 8-byte gap
+0x82B9A508 = { name = "sub_82B9A508" }  # gap_classify: blr in 8-byte gap
+0x82BB9718 = { name = "sub_82BB9718" }  # gap_classify: blr in 8-byte gap
+0x82BBE1E4 = { name = "sub_82BBE1E4" }  # gap_classify: blr in 4-byte gap
+0x82BDF758 = { name = "sub_82BDF758" }  # gap_classify: blr in 8-byte gap
+0x82BE3118 = { name = "sub_82BE3118" }  # gap_classify: blr in 8-byte gap
+0x82BE6EC4 = { name = "sub_82BE6EC4" }  # gap_classify: blr in 4-byte gap
+0x82BE807C = { name = "sub_82BE807C" }  # gap_classify: blr in 4-byte gap
+0x82BFA49C = { name = "sub_82BFA49C" }  # gap_classify: blr in 4-byte gap
+0x82C0B680 = { name = "sub_82C0B680" }  # gap_classify: blr in 8-byte gap
+0x82C189FC = { name = "sub_82C189FC" }  # gap_classify: blr in 4-byte gap
+0x82C54650 = { name = "sub_82C54650" }  # gap_classify: blr in 8-byte gap
+0x82C81B88 = { name = "sub_82C81B88" }  # gap_classify: blr in 8-byte gap
+0x82C81D0C = { name = "sub_82C81D0C" }  # gap_classify: blr in 4-byte gap
+0x82CCB1AC = { name = "sub_82CCB1AC" }  # gap_classify: blr in 4-byte gap
+0x82CE3C00 = { name = "sub_82CE3C00" }  # gap_classify: 4 insns, ends bctr in 160-byte gap
+0x82D0B684 = { name = "sub_82D0B684" }  # gap_classify: blr in 4-byte gap
+0x82D70E88 = { name = "sub_82D70E88" }  # gap_classify: blr in 8-byte gap
+0x82D799AC = { name = "sub_82D799AC" }  # gap_classify: blr in 4-byte gap
+0x82D79CD4 = { name = "sub_82D79CD4" }  # gap_classify: blr in 4-byte gap
+0x82D83EC0 = { name = "sub_82D83EC0" }  # gap_classify: blr in 8-byte gap
+0x82DB0E10 = { name = "sub_82DB0E10" }  # gap_classify: blr in 8-byte gap
+0x82E01798 = { name = "sub_82E01798" }  # gap_classify: blr in 8-byte gap
+0x82E017C0 = { name = "sub_82E017C0" }  # gap_classify: blr in 8-byte gap
+0x82E01800 = { name = "sub_82E01800" }  # gap_classify: blr in 8-byte gap
+0x82E14CA0 = { name = "sub_82E14CA0" }  # gap_classify: blr in 8-byte gap
+0x82E39A54 = { name = "sub_82E39A54" }  # gap_classify: blr in 4-byte gap
+0x82E526A8 = { name = "sub_82E526A8" }  # gap_classify: blr in 8-byte gap
+0x82E526F8 = { name = "sub_82E526F8" }  # gap_classify: blr in 8-byte gap
+0x82EC3C58 = { name = "sub_82EC3C58" }  # gap_classify: 12 insns, ends bctr in 88-byte gap
+0x82F00A64 = { name = "sub_82F00A64" }  # gap_classify: blr in 4-byte gap
+0x82F01EC0 = { name = "sub_82F01EC0" }  # gap_classify: blr in 8-byte gap
+0x82F1B738 = { name = "sub_82F1B738" }  # gap_classify: blr in 8-byte gap
+0x82F3AE14 = { name = "sub_82F3AE14" }  # gap_classify: blr in 4-byte gap
+0x82F62314 = { name = "sub_82F62314" }  # gap_classify: blr in 4-byte gap
+0x82F62E34 = { name = "sub_82F62E34" }  # gap_classify: blr in 4-byte gap
+0x82F72744 = { name = "sub_82F72744" }  # gap_classify: blr in 4-byte gap
+0x82F86FF8 = { name = "sub_82F86FF8" }  # gap_classify: 4 insns, ends bctr in 16-byte gap
+0x82FB9834 = { name = "sub_82FB9834" }  # gap_classify: blr in 4-byte gap
+0x82FEE274 = { name = "sub_82FEE274" }  # gap_classify: blr in 4-byte gap
+0x83030510 = { name = "sub_83030510" }  # gap_classify: blr in 8-byte gap
+0x830307E8 = { name = "sub_830307E8" }  # gap_classify: blr in 8-byte gap
+0x8303603C = { name = "sub_8303603C" }  # gap_classify: blr in 4-byte gap
+0x8303BED8 = { name = "sub_8303BED8" }  # gap_classify: blr in 8-byte gap
+0x8306F19C = { name = "sub_8306F19C" }  # gap_classify: blr in 4-byte gap
+0x830DF8F8 = { name = "sub_830DF8F8" }  # gap_classify: blr in 8-byte gap
+0x830DF930 = { name = "sub_830DF930" }  # gap_classify: blr in 8-byte gap
+0x830E65DC = { name = "sub_830E65DC" }  # gap_classify: blr in 4-byte gap
+0x830ED778 = { name = "sub_830ED778" }  # gap_classify: b in 8-byte gap
+0x830F8590 = { name = "sub_830F8590" }  # gap_classify: blr in 8-byte gap
+0x83116EDC = { name = "sub_83116EDC" }  # gap_classify: blr in 4-byte gap
+0x83125248 = { name = "sub_83125248" }  # gap_classify: blr in 8-byte gap
+0x83262874 = { name = "sub_83262874" }  # gap_classify: blr in 4-byte gap
+
+# Round 6 (console test 0.0.1-diag: FATAL call to unregistered function 0x82EC3C88). Code addresses built at runtime with lis/addi (or lis/ori)
+# pairs, invisible to the data-word pointer_scan, that land at the start of a remaining gap (tools: scratchpad lisaddi scan over gaps/real5.txt).
+0x82EC3C88 = { name = "sub_82EC3C88" }  # lis/addi at 0x82EC7534 and 0x82EC753C (2 refs), 40-byte gap: mr r4,r3; beqlr; lwz vtable+0x14; bctr (thunk). The FATAL address.
+0x82CE3C10 = { name = "sub_82CE3C10" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C20 = { name = "sub_82CE3C20" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C30 = { name = "sub_82CE3C30" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C40 = { name = "sub_82CE3C40" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C50 = { name = "sub_82CE3C50" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C60 = { name = "sub_82CE3C60" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C70 = { name = "sub_82CE3C70" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C80 = { name = "sub_82CE3C80" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x82CE3C90 = { name = "sub_82CE3C90" }  # lis/addi code pointer in the Lua/registration setup near 0x82CECxxx (1 ref); 16-byte virtual thunk lwz r12,0(r3); lwz r11,off(r12); mtctr; bctr (table of 10 with 0x82CE3C00)
+0x83122EA0 = { name = "sub_83122EA0" }  # lis/addi at 0x8313C150 passed as comparator (r5=4, r6=fn); 116-byte gap, no r1 use, ends with b to the already-registered sub_83122F14
