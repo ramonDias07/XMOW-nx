@@ -9,7 +9,7 @@ partir dos shaders traduzidos do próprio jogo.
 > **Em desenvolvimento: ainda não é jogável.** O jogo chega ao gameplay no console, mas a imagem da cena está errada e
 > roda a 5–18 FPS. Não há release; as builds são de diagnóstico. [Estado e histórico dos testes](docs/estado.md)
 
-[Estado atual](docs/estado.md) · [Como compilar](docs/build.md) · [Referências](docs/referencias.md) · [English overview](#english-overview)
+[Estado atual](docs/estado.md) · [Como compilar](docs/build.md) · [Capturas](#capturas-no-switch) · [Referências](docs/referencias.md) · [English overview](#english-overview)
 
 ## Estado do port
 
@@ -52,6 +52,14 @@ dump. A entrega fica em `out/sd/switch/XMOW/`, e o disco extraído vai em `game_
 | `L3 + R3` | Captura de diagnóstico do próximo quadro (texturas resolvidas em `volcado_NN/` e trace no log). |
 
 O port grava logs em `/switch/XMOW/logs/`. Shaders que faltarem na biblioteca vão para `shaders_dump/`.
+
+## Capturas no Switch
+
+Capturas feitas no Switch físico. As cutscenes já aparecem com imagem correta. No gameplay, a cena ainda sai dividida na linha 512 e com as cores erradas, o defeito que a 0.1.9 tenta corrigir (ainda sem teste).
+
+![Cutscene de abertura com o título do jogo](docs/screenshots/cutscene.jpg)
+
+![Gameplay com a imagem dividida na linha 512 (defeito conhecido)](docs/screenshots/gameplay-imagem-errada.jpg)
 
 ## Contribuições
 
