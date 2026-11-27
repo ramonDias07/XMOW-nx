@@ -27,6 +27,7 @@
 #include "gow2_gpu.h"
 #include "xmow_gpu_boost.h"
 #include "xmow_perf.h"
+#include "xmow_cpu33.h"  // 0.1.33 (CPU line)
 
 void gow2_log_main_thread();  // src/gow2_guards.cpp
 
@@ -36,16 +37,20 @@ void gow2_log_main_thread();  // src/gow2_guards.cpp
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <cmath>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <cstring>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -72,6 +77,7 @@ void gow2_log_main_thread();  // src/gow2_guards.cpp
 #include <unordered_set>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <filesystem>
 
 #include <rex/cvar.h>
@@ -83,6 +89,7 @@ void gow2_log_main_thread();  // src/gow2_guards.cpp
 #include <rex/x360/peticion.h>
 
 #include "gow2_shaders.h"
+#include "xmow_bench.h"
 
 // xxHash reads with memcpy under GCC's strict aliasing (see shaders/ds_shader_library.cpp).
 #undef XXH_FORCE_MEMORY_ACCESS
@@ -152,9 +159,14 @@ REXCVAR_DEFINE_BOOL(xmow_captura_ab, false, "XMOW",
 REXCVAR_DEFINE_STRING(xmow_ab_ps, "10127,1121,1917,2639,6971", "XMOW",
                       "Numeros de PS (de la biblioteca) que la captura _ps no dibuja; sus 3 primeros dibujos de la "
                       "sesion van al log con texturas y constantes");
-REXCVAR_DEFINE_STRING(xmow_omitir_ps, "2639", "XMOW",
+REXCVAR_DEFINE_STRING(xmow_omitir_ps, "", "XMOW",
                       "Pixel shaders (numeros del dslib, separados por coma) que nunca se dibujan. 2639: la niebla por "
-                      "altura/profundidad de pantalla entera, que lavaba toda la imagen en blanco azulado (teste 17/18)");
+                      "altura/profundidad de pantalla entera, que lavaba toda la imagen en blanco azulado (teste 17/18). "
+                      "Desde 0.1.19 la niebla la decide xmow_niebla_altura (AUTO); 2639 aqui la quita siempre");
+REXCVAR_DEFINE_INT32(xmow_niebla_altura, 0, "XMOW",
+                     "Full screen height fog (PS n2639; quick menu HEIGHT FOG): 0 = AUTO (drawn everywhere, the frontend "
+                     "too since 0.1.20), 1 = always, 2 = off in gameplay only (since 0.1.32: the title and menus keep "
+                     "their fog; the frontend is told by the fog's own constants and by the map package, as LIGHTING)");
 REXCVAR_DEFINE_INT32(gow2_auto_captura_s, 0, "XMOW",
                      "Cada cuantos segundos se guarda una captura reducida (640x360) en capturas/auto_NNNN.bmp; 0 = nunca");
 REXCVAR_DEFINE_INT32(gow2_auto_volcado_primero_s, 120, "XMOW",
@@ -244,6 +256,12 @@ REXCVAR_DEFINE_BOOL(xmow_anillo_rptr_rapido, true, "XMOW",
                     "Ring: the read pointer goes back to the game before the ring waits (WAIT_REG_MEM) and at the end "
                     "of each batch before waiting for the renderer's uploads, and each publication wakes the threads "
                     "waiting in Direct3D's spin (xmow_spin_cede)");
+REXCVAR_DEFINE_BOOL(xmow_ring_wake_once, false, "XMOW",
+                    "0.1.33 (test): a CP_RB_WPTR write (Direct3D's kick) that finds the ring thread asleep takes the "
+                    "'asleep' flag before waking it, so the kicks that follow while the ring thread is still waking up "
+                    "do not take the ring mutex (Horizon hands it to the woken thread at the signal: the render thread "
+                    "slept in svcArbitrateLock, 2 % of its time in test 34). false = every such kick locks and "
+                    "notifies, as 0.1.32. Live");
 REXCVAR_DEFINE_BOOL(xmow_imload_rapido, true, "XMOW",
                     "IM_LOAD_IMMEDIATE: a shader load whose raw microcode (hash of the packet's words) was identified "
                     "before reuses that answer, without the byte swap, the library lock and the identification");
@@ -252,12 +270,159 @@ REXCVAR_DEFINE_BOOL(xmow_diag_solo_activo, true, "XMOW",
                     "the 10 s report) only in frames where a diagnostic is active (trace, probe, A/B capture, skip or "
                     "search mode); false = every frame, as before. The search modes take their candidates from the "
                     "frame before the press: with true they need one of those on, or false here");
+// 0.1.22: stack sampling of the SDK profiler (switch_perf.cpp), switched on and off during play from the menu.
+extern "C" bool RexSwitchPerfStacksActive(void);
+extern "C" bool RexSwitchPerfToggleStacks(void);
+// 0.1.26 (SDK 1032): the two busiest threads are sampled every millisecond and the raw samples go to
+// logs/rex/rex_pilhas.bin through the low-priority SD writer. 0.1.28: off by default (test 34: on for the whole test).
+REXCVAR_DEFINE_BOOL(xmow_amostragem_pilas, false, "XMOW",
+                    "Samples where every thread spends its time (every millisecond, with call stacks; the two busiest "
+                    "threads on every millisecond) into the profile log, and the raw samples into rex_pilhas.bin. The "
+                    "game runs a little slower while it is on. Live: checked once per game frame");
+extern "C" void RexSwitchPerfFijarVolcadoCrudo(bool (*escribir)(const char* ruta, void* datos, size_t bytes),
+                                               unsigned tope_mb);
+REXCVAR_DEFINE_INT32(xmow_amostragem_volcado_mb, 192, "XMOW",
+                     "Cap per boot, in MB, of the raw stack samples written to logs/rex/rex_pilhas.bin while stack "
+                     "sampling is on (about 1-2 MB per 10 s; written by the low-priority SD writer, in pieces). 0 = no "
+                     "raw dump")
+    .range(0, 2048);
+REXCVAR_DEFINE_BOOL(xmow_pular_caixas_consulta, true, "XMOW",
+                    "With gow2_oclusion_real = false: the occlusion query boxes (draws between a query's begin and end "
+                    "with every color channel masked off and no depth or stencil write) are not sent to the renderer; "
+                    "the query is still answered visible. They paint nothing, about a third of the draws in open views");
+// 0.1.21 (diagnostico-0.1.20.md item 6): conservative real occlusion. The game is answered at once (never waits), from
+// a history kept per primitive; the GPU counts the boxes in the background only to feed that history.
+REXCVAR_DEFINE_BOOL(xmow_oclusao_conservadora, false, "XMOW",
+                    "With gow2_oclusion_real = false: occlusion queries are answered at once from the history of their "
+                    "box (keyed by a hash of the box vertices): hidden only after two valid GPU counts of 0 in a row "
+                    "(depth target without a pending clear or contenido_invalido), visible otherwise. The boxes are "
+                    "drawn and counted on the GPU without the game waiting for it: every frame for a box last counted 0, "
+                    "every xmow_oclusao_reteste_quadros frames for a visible one (skipped the other frames, as "
+                    "xmow_pular_caixas_consulta). false = as 0.1.20");
+REXCVAR_DEFINE_INT32(xmow_oclusao_reteste_quadros, 4, "XMOW",
+                     "xmow_oclusao_conservadora: a box whose last count was visible is drawn and counted once every this "
+                     "many frames (spread over the frames by its hash); 1 = every frame");
+REXCVAR_DEFINE_INT32(xmow_log_hitch_ms, 50, "XMOW",
+                     "Frames (Swap to Swap on the ring thread) longer than this many ms are collected as [xmow hitch] "
+                     "lines (frame time, draws, query boxes skipped, textures uploaded, waits) and written in the 10 s "
+                     "summary, at most 20 per 10 s (the log is written synchronously to the SD). 0 = off");
 REXCVAR_DECLARE(bool, xmow_spin_cede);           // src/xmow_perf_hooks.cpp
 REXCVAR_DECLARE(int32_t, xmow_spin_cede_us);     // src/xmow_perf_hooks.cpp
 REXCVAR_DECLARE(bool, xmow_consulta_inmediata);  // src/xmow_perf_hooks.cpp
+REXCVAR_DECLARE(bool, xmow_precarga_mapa);       // src/gow2_shaders.cpp (0.1.27)
+// 0.1.28: logged at boot with the [xmow perf] line.
+REXCVAR_DECLARE(int32_t, xmow_d3d_quadros_adiante);  // src/xmow_perf_hooks.cpp
+REXCVAR_DECLARE(int32_t, xmow_distancia_corte);      // src/xmow_game_patches.cpp
+REXCVAR_DECLARE(int32_t, xmow_detalhe_malha);        // src/xmow_game_patches.cpp
+REXCVAR_DECLARE(int32_t, xmow_iluminacao);           // src/xmow_resolucao_interna.cpp
+REXCVAR_DECLARE(bool, xmow_dk_constantes_sucias);    // sdk-g2 src/x360/deko/dibujos.cpp
+REXCVAR_DECLARE(bool, xmow_registro_barato);         // sdk-g2 src/x360/deko/destinos.cpp
+REXCVAR_DECLARE(bool, xmow_gpu_boost);               // src/xmow_gpu_boost.cpp
+REXCVAR_DECLARE(int32_t, xmow_corte_pequenos);       // src/xmow_game_patches.cpp (0.1.29)
+REXCVAR_DECLARE(bool, xmow_dk_barreira_copia_seletiva);  // sdk-g2 src/x360/deko/destinos.cpp (xmow 1035)
+REXCVAR_DECLARE(bool, xmow_dk_menos_estado);             // sdk-g2 src/x360/deko/dibujos.cpp (xmow 1036, 0.1.30)
+REXCVAR_DECLARE(bool, xmow_dk_resolve_z_unico);          // sdk-g2 src/x360/deko/destinos.cpp (xmow 1036, 0.1.30)
+REXCVAR_DECLARE(bool, xmow_d3d_nativo);                  // src/xmow_perf_hooks.cpp (0.1.30)
+REXCVAR_DECLARE(bool, xmow_dk_remapeo_normalizado);      // sdk-g2 src/x360/deko/dibujos.cpp (xmow 1037, 0.1.31)
+REXCVAR_DECLARE(bool, xmow_sem_prepasso_motor);
+// 0.1.33 (boot line)
+REXCVAR_DECLARE(bool, xmow_resolucao_dinamica);  // src/xmow_resolucao_interna.cpp
+REXCVAR_DECLARE(bool, xmow_sem_distorcao);
+REXCVAR_DECLARE(bool, xmow_sem_bloom);
+REXCVAR_DECLARE(bool, xmow_sem_volumes_nevoa);
+REXCVAR_DECLARE(bool, xmow_diag_sem_speedtree);
+REXCVAR_DECLARE(int32_t, xmow_native_shader_params);  // src/xmow_cpu33_params.cpp (0.1.33; 0.1.33d: 2 = SELF-CHECK)
+REXCVAR_DECLARE(bool, xmow_dk_vs_entrada_plegada);     // sdk-g2 dibujos.cpp (xmow 1039, 0.1.33d)
+namespace rex::x360 {
+extern std::atomic<uint32_t> g_xmow_reinicio_informes;  // sdk-g2 destinos.cpp (0.1.33d): bumped by live menu changes
+}
+REXCVAR_DECLARE(int32_t, xmow_material_replay);    // src/xmow_cpu33_material.cpp (0.1.33)
+REXCVAR_DECLARE(bool, xmow_dk_tiled_cache);             // sdk-g2 destinos.cpp
+REXCVAR_DECLARE(int32_t, nfsmw_dk_envio_parcial);       // sdk-g2 dibujos.cpp
+// 0.1.29 (item 3): inert draws outside occlusion queries.
+REXCVAR_DEFINE_BOOL(xmow_pular_inertes, true, "XMOW",
+                    "Outside occlusion queries, a draw that writes no color channel, no depth and no stencil (the "
+                    "[xmow census] inert class, about 96 per frame in the jungle) is not sent to the renderer: it "
+                    "cannot change the image (the renderer has no memexport). Not with gow2_oclusion_real, nor in the "
+                    "probe or the L3 + R3 traced frame. false = sent as in 0.1.28. Live");
+// 0.1.29 (item 2): diagnostic of the GPU's fixed cost per draw.
+REXCVAR_DEFINE_BOOL(xmow_diag_tijera_1px, false, "XMOW",
+                    "Diagnostic, off by default: every game draw is scissored to the single pixel at 0,0, so the GPU "
+                    "still does each draw's fixed work (state, vertices, setup) but shades almost no pixels. The GPU "
+                    "time that is left ([deko3d] GPU busy, fps) is the per-draw fixed cost. THE IMAGE IS WRONG while "
+                    "it is on (the port menu still shows). Live");
+// 0.1.30: the same diagnostic with a third state. 0 = off, 1 = 1 PIXEL (as xmow_diag_tijera_1px), 2 = EMPTY: every game
+// draw keeps all of its state, uploads and binds but is emitted with 0 vertices (PeticionDibujo::vacio): what is left
+// of the GPU time is the cost of the state changes alone. xmow_diag_tijera_1px = true still means 1 PIXEL.
+REXCVAR_DEFINE_INT32(xmow_diag_custo_dibujo, 0, "XMOW",
+                     "Diagnostic, off by default: 0 = off; 1 = 1 PIXEL (every game draw scissored to the pixel at 0,0, "
+                     "as xmow_diag_tijera_1px); 2 = EMPTY (every game draw recorded with all of its state but 0 "
+                     "vertices: the GPU pays for the state changes only); 3 = ONE TRIANGLE (all of the state, only the "
+                     "first triangle drawn). THE IMAGE IS WRONG while it is on (the port menu still shows). Never saved "
+                     "by the menu, always 0 at start (0.1.33c). Live")
+    .range(0, 3);
+// 0.1.29 (item 5): L3 + R3 takes a screen capture; the full dump only when asked for.
+REXCVAR_DEFINE_BOOL(xmow_l3r3_volcado_completo, false, "XMOW",
+                    "L3 + R3: false = only a screen capture of the presented frame (capturas/cap_NNN.bmp, about 2.7 MB, "
+                    "no stall). true = also the full diagnostic dump of the next frame (every resolved texture as BMP "
+                    "in volcado_NN/ and the draw-by-draw trace in the log; tens of MB to the SD card, the game stalls "
+                    "while it is written). Live");
+// 0.1.29 (item 4): xmow_iluminacao per map (src/xmow_resolucao_interna.cpp).
+void XmowIluminacaoPorMapa(const char* paquete, bool jogo);
+bool XmowMapaDeJogo();  // 0.1.32: the last map package opened is a gameplay map (xmow_niebla_altura 2)
+// 0.1.33d (review S-B): every height fog draw is classified (frontend fog constants or not) and counted for the game
+// thread, which decides at the start of a frame (xmow_resolucao_interna.cpp AlInicioDelCuadro) whether the game went
+// back to the main menu. Nothing is applied from the ring thread.
+void XmowNieblaClasificada(bool frontal);
 
 namespace gow2::gpu {
 namespace {
+
+// 0.1.27: the last persistent level the game opened ("jungle1_p"), set on the thread that opens it (the kernel's
+// g_xmow_paquete_ue3 hook), read by MapaPorSwap on the ring.
+std::mutex& MapaPendienteCandado() {
+  static std::mutex m;
+  return m;
+}
+std::string& MapaPendiente() {
+  static std::string s;
+  return s;
+}
+void PaqueteUe3Abierto(const char* nombre) {
+  // 0.1.34b (review S8): the kernel's "[XMOW mapa]" line (sdk-g2 xboxkrnl_io.cpp, the first open of each package
+  // name) is INFO and PLAY MODE keeps WARN and up: here the same line at WARN, so a crash log still shows what loaded.
+  if (xmow::bench::ModoJogoEfetivo()) {
+    static std::mutex cerrojo;
+    static std::unordered_set<std::string> vistos;
+    bool nuevo = false;
+    {
+      std::lock_guard<std::mutex> l(cerrojo);
+      nuevo = vistos.size() < 8192 && vistos.insert(nombre).second;
+    }
+    if (nuevo) REXLOG_WARN("[XMOW mapa] {}", nombre);
+  }
+  // "<map>_p.xxx", any case: the persistent level of a map (Wolverine's maps stream their zones as other packages).
+  std::string n(nombre);
+  for (char& c : n) c = char(std::tolower(static_cast<unsigned char>(c)));
+  // 0.1.29 (xmow_iluminacao per map): a gameplay map, or the frontend map (WStart.xxx: title and menus), before its
+  // actors attach their lights. The name may come with a path.
+  {
+    const size_t barra = n.find_last_of("\\/:");
+    const std::string_view archivo = barra == std::string::npos ? std::string_view(n) : std::string_view(n).substr(barra + 1);
+    if (archivo == "wstart.xxx") {
+      XmowIluminacaoPorMapa("WStart.xxx", false);
+    } else if (archivo.size() >= 7 && archivo.substr(archivo.size() - 6) == "_p.xxx") {
+      XmowIluminacaoPorMapa(std::string(archivo).c_str(), true);
+    }
+  }
+  if (n.size() < 7 || n.compare(n.size() - 6, 6, "_p.xxx") != 0) return;
+  n.resize(n.size() - 4);
+  for (char& c : n) {
+    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-') c = '_';
+  }
+  std::lock_guard<std::mutex> l(MapaPendienteCandado());
+  MapaPendiente() = std::move(n);
+}
 
 namespace xenos = rex::graphics::xenos;
 using rex::X_STATUS;  // X_STATUS_SUCCESS and X_STATUS_UNSUCCESSFUL need it too
@@ -282,6 +447,30 @@ constexpr auto kWaitRegMemMax = std::chrono::milliseconds(200);
 constexpr uint16_t kMaxExtent = 2048 >> 3;  // xenos::kTexture2DCubeMaxWidthHeight >> 3
 constexpr int32_t kFakeSampleCount = 1000;  // the SDK's query_occlusion_fake_sample_count
 constexpr auto kReportEvery = std::chrono::seconds(10);
+
+#if GOW2_DEKO3D
+// 0.1.26 (SDK 1032): the raw stack samples of each 10 s interval (switch_perf.cpp), appended to rex_pilhas.bin on the
+// renderer's SD writer thread (priority 0x3B, in pieces of xmow_volcado_trozo_kb with pauses), never on the ring.
+// Refused while the writer has other work queued (an L3 + R3 dump), so a dump is never delayed by more than one block.
+std::atomic<uint32_t> g_pilhas_pendentes{0};
+bool EscritorPilhas(const char* ruta, void* datos, size_t bytes) {
+  // Also refused with 4 blocks (~8 MB) still queued: a slow card loses intervals instead of piling up memory.
+  const uint32_t mias = g_pilhas_pendentes.load(std::memory_order_acquire);
+  if (rex::x360::EscriturasSdPendientes() > mias || mias >= 4) {
+    return false;
+  }
+  g_pilhas_pendentes.fetch_add(1, std::memory_order_acq_rel);
+  std::filesystem::path path(ruta);
+  rex::x360::EncolarEscrituraSd([path, datos, bytes]() {
+    if (!rex::x360::EscribirArchivoEnTrozos(path, datos, bytes, true)) {
+      REXLOG_WARN("[xmow perf] raw stack samples: could not append {} bytes to {}", bytes, path.string());
+    }
+    std::free(datos);
+    g_pilhas_pendentes.fetch_sub(1, std::memory_order_acq_rel);
+  });
+  return true;
+}
+#endif
 
 // Reads the ring (a power-of-two buffer of words that wraps) or an indirect buffer (linear).
 struct Reader {
@@ -380,6 +569,12 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     REXCVAR_SET(nfsmw_sombras_sin_vegetacion, false);
     REXCVAR_SET(nfsmw_nativo_ps_solo_alfa, false);
     REXCVAR_SET(nfsmw_dk_sombras_sesgo_pitch, 960);
+    // 0.1.33c (review F3): the draw cost probe breaks the image; it never starts on (the menu no longer saves it).
+    if (REXCVAR_GET(xmow_diag_custo_dibujo) != 0) {
+      REXLOG_INFO("[xmow perf] xmow_diag_custo_dibujo={} from the config ignored: the draw cost probe starts off",
+                  REXCVAR_GET(xmow_diag_custo_dibujo));
+      REXCVAR_SET(xmow_diag_custo_dibujo, 0);
+    }
     // Telemetry (automatic captures, frame dumps, per-draw traces of light frames, CPU stack sampling) only with
     // telemetria.flag next to the NRO: it costs frames (the stack sampler stops every thread each millisecond).
     {
@@ -399,6 +594,75 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
                   REXCVAR_GET(xmow_spin_cede), REXCVAR_GET(xmow_spin_cede_us), REXCVAR_GET(xmow_consulta_inmediata),
                   REXCVAR_GET(gow2_oclusion_real), REXCVAR_GET(xmow_anillo_rptr_rapido),
                   REXCVAR_GET(xmow_imload_rapido), REXCVAR_GET(xmow_diag_solo_activo));
+      REXLOG_INFO("[xmow 0.1.28] render ahead xmow_d3d_quadros_adiante={} ({}); view distance xmow_distancia_corte={} % "
+                  "(live); mesh detail xmow_detalhe_malha={} % LOD distance (live); lighting xmow_iluminacao={} ({}, per map since 0.1.29); constants by written range "
+                  "xmow_dk_constantes_sucias={}; cheap clear/resolve logs xmow_registro_barato={}; stack sampling "
+                  "xmow_amostragem_pilas={}; automatic dumps gow2_auto_volcados_max={}, traces gow2_trazas_max={}; "
+                  "CPU BOOST / PEAK BOOST removed (no clock is set by the port except the official GPU boost profile, "
+                  "xmow_gpu_boost={})",
+                  REXCVAR_GET(xmow_d3d_quadros_adiante),
+                  REXCVAR_GET(xmow_d3d_quadros_adiante) >= 2 ? "2 frames, test" : "1 frame, the game's own",
+                  REXCVAR_GET(xmow_distancia_corte), REXCVAR_GET(xmow_detalhe_malha), REXCVAR_GET(xmow_iluminacao),
+                  REXCVAR_GET(xmow_iluminacao) >= 2 ? "NONE: DynamicLights off" : "STANDARD",
+                  REXCVAR_GET(xmow_dk_constantes_sucias), REXCVAR_GET(xmow_registro_barato),
+                  REXCVAR_GET(xmow_amostragem_pilas), REXCVAR_GET(gow2_auto_volcados_max), REXCVAR_GET(gow2_trazas_max),
+                  REXCVAR_GET(xmow_gpu_boost));
+      REXLOG_INFO("[xmow 0.1.29] small object cull xmow_corte_pequenos={} ({}, live); lighting xmow_iluminacao={} "
+                  "({}, gameplay maps only, applied at each map load); skip inert draws xmow_pular_inertes={}; "
+                  "selective copy barrier xmow_dk_barreira_copia_seletiva={}; 1 pixel draws diagnostic "
+                  "xmow_diag_tijera_1px={}; L3 + R3 {} (xmow_l3r3_volcado_completo={}); internal resolution shown "
+                  "after the FPS counter",
+                  REXCVAR_GET(xmow_corte_pequenos),
+                  REXCVAR_GET(xmow_corte_pequenos) <= 0   ? "OFF"
+                  : REXCVAR_GET(xmow_corte_pequenos) == 1 ? "LOW"
+                                                          : "HIGH",
+                  REXCVAR_GET(xmow_iluminacao), REXCVAR_GET(xmow_iluminacao) >= 2 ? "NONE" : "STANDARD",
+                  REXCVAR_GET(xmow_pular_inertes), REXCVAR_GET(xmow_dk_barreira_copia_seletiva),
+                  REXCVAR_GET(xmow_diag_tijera_1px),
+                  REXCVAR_GET(xmow_l3r3_volcado_completo) ? "screen capture + full dump" : "screen capture only",
+                  REXCVAR_GET(xmow_l3r3_volcado_completo));
+      REXLOG_INFO("[xmow 0.1.32] engine depth prepass without its draw lists xmow_sem_prepasso_motor={} (live, "
+                  "only with gow2_sin_prepaso_z={} and gow2_sin_prepaso_enmascarado={} on and no occlusion queries); "
+                  "native Direct3D state copies xmow_d3d_nativo={} (default true since 0.1.32); height fog "
+                  "xmow_niebla_altura={} ({}); draws by primitive type in \"[deko3d] xmow 1038\"",
+                  REXCVAR_GET(xmow_sem_prepasso_motor), REXCVAR_GET(gow2_sin_prepaso_z),
+                  REXCVAR_GET(gow2_sin_prepaso_enmascarado), REXCVAR_GET(xmow_d3d_nativo),
+                  REXCVAR_GET(xmow_niebla_altura),
+                  REXCVAR_GET(xmow_niebla_altura) == 2   ? "NO: off on gameplay maps only, the frontend keeps it"
+                  : REXCVAR_GET(xmow_niebla_altura) == 1 ? "YES"
+                                                         : "AUTO");
+      REXLOG_INFO("[xmow 0.1.33] dynamic resolution xmow_resolucao_dinamica={}; gameplay maps without distortion "
+                  "xmow_sem_distorcao={}, bloom xmow_sem_bloom={}, fog volumes xmow_sem_volumes_nevoa={}; SpeedTree "
+                  "leaves and fronds off xmow_diag_sem_speedtree={}; partial submit every nfsmw_dk_envio_parcial={} draws; "
+                  "tiled cache xmow_dk_tiled_cache={}; stack sampling xmow_amostragem_pilas={} (menu, no "
+                  "telemetria.flag needed); native shader constant setters xmow_native_shader_params={}; material "
+                  "parameter replay xmow_material_replay={} (0 off, 1 VERIFY, 2 ON); ring wake once "
+                  "xmow_ring_wake_once={}; folded vertex shaders xmow_dk_vs_entrada_plegada={} (0.1.33d, needs "
+                  "shadercache_dksh_vs.bin); native shader parameters 0 off, 1 on, 2 SELF-CHECK",
+                  REXCVAR_GET(xmow_resolucao_dinamica), REXCVAR_GET(xmow_sem_distorcao), REXCVAR_GET(xmow_sem_bloom),
+                  REXCVAR_GET(xmow_sem_volumes_nevoa), REXCVAR_GET(xmow_diag_sem_speedtree),
+                  REXCVAR_GET(nfsmw_dk_envio_parcial), REXCVAR_GET(xmow_dk_tiled_cache),
+                  REXCVAR_GET(xmow_amostragem_pilas), REXCVAR_GET(xmow_native_shader_params),
+                  REXCVAR_GET(xmow_material_replay), REXCVAR_GET(xmow_ring_wake_once),
+                  REXCVAR_GET(xmow_dk_vs_entrada_plegada));
+      REXLOG_INFO("[xmow 0.1.31] identity vertex remap sent as identity xmow_dk_remapeo_normalizado={} (live); new "
+                  "per frame counters in \"[deko3d] xmow 1037\" (remap, manual fetches, GPU vertex shader invocations "
+                  "and input primitives, why resolves are copied) and the depth prepass draws in [xmow census]",
+                  REXCVAR_GET(xmow_dk_remapeo_normalizado));
+      REXLOG_INFO("[xmow 0.1.30] native Direct3D state copies xmow_d3d_nativo={} (live); fewer state submissions "
+                  "xmow_dk_menos_estado={} (live); skip repeated depth resolves xmow_dk_resolve_z_unico={} (live); "
+                  "draw cost diagnostic xmow_diag_custo_dibujo={} ({}); view distance xmow_distancia_corte={} %",
+                  REXCVAR_GET(xmow_d3d_nativo), REXCVAR_GET(xmow_dk_menos_estado), REXCVAR_GET(xmow_dk_resolve_z_unico),
+                  REXCVAR_GET(xmow_diag_custo_dibujo),
+                  REXCVAR_GET(xmow_diag_custo_dibujo) == 3   ? "ONE TRIANGLE"
+                  : REXCVAR_GET(xmow_diag_custo_dibujo) == 2 ? "EMPTY"
+                  : REXCVAR_GET(xmow_diag_custo_dibujo) == 1 ? "1 PIXEL"
+                                                             : "NO",
+                  REXCVAR_GET(xmow_distancia_corte));
+      REXLOG_INFO("[xmow occlusion] xmow_oclusao_conservadora={} xmow_oclusao_reteste_quadros={} "
+                  "xmow_pular_caixas_consulta={} (gow2_oclusion_real={} wins when on)",
+                  REXCVAR_GET(xmow_oclusao_conservadora), REXCVAR_GET(xmow_oclusao_reteste_quadros),
+                  REXCVAR_GET(xmow_pular_caixas_consulta), REXCVAR_GET(gow2_oclusion_real));
       // The renderer's GPU profile of a frame every 20 s (a barrier and two timestamps around each of ~1300 draws, the
       // first draw of each pass drawn twice) and the frame structure traces (hundreds of log lines to the SD card once
       // a minute) are telemetry too: each was a visible hitch.
@@ -410,6 +674,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     }
     // Before the game creates its shaders (the create hooks look the containers up in it).
     gow2::shaders::Global().Cargar(rex::filesystem::GetExecutableFolder() / "xmow_shaders.dslib");
+    rex::x360::g_xmow_paquete_ue3.store(&PaqueteUe3Abierto, std::memory_order_release);  // 0.1.27 (MapaPorSwap)
 #endif
     last_report_ = Clock::now();
     vblank_thread_ = rex::system::object_ref<rex::system::XHostThread>(new rex::system::XHostThread(
@@ -529,22 +794,48 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     const uint32_t r = (address & 0xFFFF) / 4;
     if (r < kRegisterCount) {
       registers_[r] = value;  // no side effects through MMIO (graphics_system.cpp)
+#if GOW2_DEKO3D
+      if (r >= 0x4000 && r < 0x4800) MarcarConstante(r);  // xmow 1034: never seen, but then the renderer compares it
+#endif
     }
     if (r == kRegCpRbWptr) {
       write_pointer_.store(value, std::memory_order_seq_cst);
+      wptr_escritas_.store(wptr_escritas_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
       // Only a sleeping ring thread needs the lock and the notify (each KickOff paid both, 3-5 % of the rendering
-      // thread). seq_cst pairs with ring_dormido_ in RingLoop: either the ring's check sees this write pointer, or this
-      // load sees it asleep and wakes it; taking the lock for an instant keeps the wakeup from being lost.
-      if (ring_dormido_.load(std::memory_order_seq_cst)) {
+      // thread). seq_cst pairs with ring_dormido_ in RingLoop's wait predicate: either the ring's check sees this write
+      // pointer, or this sees the flag and wakes it; taking the lock for an instant keeps the wakeup from being lost.
+      // 0.1.33 (xmow_ring_wake_once): the kick takes the flag, so only the first kick after the ring went to sleep
+      // locks and notifies (the predicate sets the flag again before every sleep and reads the pointer after it).
+      const bool dormido = REXCVAR_GET(xmow_ring_wake_once)
+                               ? ring_dormido_.exchange(false, std::memory_order_seq_cst)
+                               : ring_dormido_.load(std::memory_order_seq_cst);
+      if (dormido) {
+        wptr_despertares_.store(wptr_despertares_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+        // 0.1.33d (Fable review 3.2): the time the kick spends taking the ring's lock and notifying, measured only
+        // here (a sleeping ring), so the ring wake cost is a number in the report instead of an A/B by fps.
+        const uint64_t t0 = NsAnillo();
         {
           std::lock_guard<std::mutex> lock(ring_mutex_);
         }
+        const uint64_t t1 = NsAnillo();
         ring_cv_.notify_one();
+        const uint64_t t2 = NsAnillo();
+        kick_ns_cerrojo_.store(kick_ns_cerrojo_.load(std::memory_order_relaxed) + (t1 - t0), std::memory_order_relaxed);
+        kick_ns_aviso_.store(kick_ns_aviso_.load(std::memory_order_relaxed) + (t2 - t1), std::memory_order_relaxed);
+        if (t1 - t0 > kick_ns_max_.load(std::memory_order_relaxed)) kick_ns_max_.store(t1 - t0, std::memory_order_relaxed);
       }
     }
   }
 
   uint32_t Register(uint32_t index) const { return index < kRegisterCount ? registers_[index] : 0; }
+
+#if GOW2_DEKO3D
+  // xmow 1034: the 16-byte constant register of a register index 0x4000-0x47FF, marked changed for the next draw.
+  void MarcarConstante(uint32_t index) {
+    const uint32_t c = ((index - 0x4000) >> 2) & 0xFF;
+    (index < 0x4400 ? sucias_vs_ : sucias_ps_)[c >> 6] |= uint64_t(1) << (c & 63);
+  }
+#endif
 
   // Register writes from the ring, with the side effects the game relies on.
   void WriteRegister(uint32_t index, uint32_t value) {
@@ -559,6 +850,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     if (registers_[index] != value) {
       if (index >= 0x4000 && index < 0x4800) {
         ++(index < 0x4400 ? generacion_constantes_vs_ : generacion_constantes_ps_);
+        MarcarConstante(index);  // xmow 1034
       } else if (index >= 0x4800 && index <= 0x48BF) {
         ++generacion_fetch_;
       } else if (EsRegistroDeEncuadre(index)) {
@@ -689,22 +981,38 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     uint32_t read = 0;
     uint32_t generation = 0;
     while (active_.load(std::memory_order_acquire)) {
+      xmow::perf::AfinarHilo(xmow::perf::Papel::Anillo);  // xmow_afinidade_threads: core 2
       {
+        const uint64_t t_ocioso = NsAnillo();  // xmow 1031: ring time per frame ([xmow hitch])
         std::unique_lock<std::mutex> lock(ring_mutex_);
-        ring_dormido_.store(true, std::memory_order_seq_cst);
-        ring_cv_.wait_for(lock, std::chrono::milliseconds(pending_queries_.empty() ? 4 : 1), [&] {
+        // 0.1.33: the flag is set by the predicate, only when there is nothing to do, and the write pointer is read
+        // again after setting it (with xmow_ring_wake_once a kick takes the flag, so every new wait sets it again).
+        const auto hay_trabajo = [&] {
           return !active_.load(std::memory_order_acquire) ||
                  write_pointer_.load(std::memory_order_seq_cst) != read ||
                  ring_generation_.load(std::memory_order_acquire) != generation;
+        };
+        ring_cv_.wait_for(lock, std::chrono::milliseconds(pending_queries_.empty() ? 4 : 1), [&] {
+          if (hay_trabajo()) return true;
+          ring_dormido_.store(true, std::memory_order_seq_cst);
+          return hay_trabajo();
         });
-        ring_dormido_.store(false, std::memory_order_relaxed);
+        ring_dormido_.store(false, std::memory_order_seq_cst);
+        anillo_.ocioso += NsAnillo() - t_ocioso;
       }
       if (!active_.load(std::memory_order_acquire)) {
         break;
       }
-      Report();
-      OcclusionPoll();
-      ProbePoll();
+      {
+        const uint64_t t = NsAnillo();
+        Report();
+        const uint64_t t2 = NsAnillo();
+        anillo_.informe += t2 - t;
+        OcclusionPoll();
+        OclusionConservadoraPoll();  // xmow_oclusao_conservadora: never waits
+        ProbePoll();
+        anillo_.sondeos += NsAnillo() - t2;
+      }
       const uint32_t gen = ring_generation_.load(std::memory_order_acquire);
       if (gen != generation) {
         generation = gen;
@@ -733,6 +1041,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       // xmow_anillo_rptr_rapido: WAIT_REG_MEM publishes this reader's position before it waits (PacketType3).
       const bool rptr_rapido = REXCVAR_GET(xmow_anillo_rptr_rapido);
       lector_anillo_ = rptr_rapido ? &reader : nullptr;
+      const uint64_t t_paquetes = NsAnillo();  // xmow 1031
       while (reader.Pending()) {
         if (!Packet(reader, 0)) {
           break;  // partial packet: the rest comes with the next CP_RB_WPTR
@@ -742,6 +1051,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
           publicado = reader.pos;
         }
       }
+      anillo_.paquetes += NsAnillo() - t_paquetes;
       lector_anillo_ = nullptr;
       read = reader.pos;
       // Not a GuestSeesGpuProgress: it is written after every batch of the ring, and each one made the renderer's
@@ -751,7 +1061,9 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       if (rptr_rapido && read != publicado) PublicarRptr(read);
 #if GOW2_DEKO3D
       if (destinos_) {
+        const uint64_t t = NsAnillo();
         destinos_->EsperarSubidas();
+        anillo_.subidas += NsAnillo() - t;
       }
 #endif
       if (!rptr_rapido) PublicarRptr(read);
@@ -762,11 +1074,20 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   // One line every kReportEvery, on the ring thread, so the log shows whether the game is advancing.
   void Report() {
     const auto now = Clock::now();
-    if (now - last_report_ < kReportEvery) {
+    // 0.1.33d (Fable review 5.2): a live menu change closes the window now, so the next window starts at the change
+    // and each side of an A/B made with the menu open has whole 10 s reports.
+    const uint32_t reinicio = rex::x360::g_xmow_reinicio_informes.load(std::memory_order_relaxed);
+    const bool cortado = reinicio != reinicio_visto_;
+    reinicio_visto_ = reinicio;
+    if (!cortado && now - last_report_ < kReportEvery) {
       return;
     }
     const double seconds = std::chrono::duration<double>(now - last_report_).count();
     last_report_ = now;
+    if (cortado) {
+      REXLOG_INFO("[gpu] report window cut by a menu change: this report covers {:.1f} s", seconds);
+    }
+    const uint64_t quadros_intervalo = swaps_ - reported_swaps_;  // 0.1.26 ([xmow census])
     REXLOG_INFO("[gpu] {:.1f} s: {} swaps ({:.1f}/s), {} draws, {} packets, {} vblanks, {} waits cut short",
                 seconds, swaps_ - reported_swaps_, double(swaps_ - reported_swaps_) / seconds,
                 draws_ - reported_draws_, packets_ - reported_packets_,
@@ -776,9 +1097,21 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     reported_packets_ = packets_;
     REXLOG_INFO("[gpu] ring waits: {} WAIT_REG_MEM waited {:.1f} ms in total", reg_mem_waits_,
                 double(reg_mem_wait_ns_) / 1e6);
+    {
+      const uint64_t despertares = wptr_despertares_.exchange(0, std::memory_order_relaxed);
+      const uint64_t escritas = wptr_escritas_.exchange(0, std::memory_order_relaxed);
+      const uint64_t ns_cerrojo = kick_ns_cerrojo_.exchange(0, std::memory_order_relaxed);
+      const uint64_t ns_aviso = kick_ns_aviso_.exchange(0, std::memory_order_relaxed);
+      const uint64_t ns_max = kick_ns_max_.exchange(0, std::memory_order_relaxed);
+      REXLOG_INFO("[gpu] ring wakes: {} of {} write pointer writes found the ring asleep and woke it "
+                  "(xmow_ring_wake_once {}); kick lock wait {:.2f} ms in total (longest {:.1f} us), notify {:.2f} ms",
+                  despertares, escritas, REXCVAR_GET(xmow_ring_wake_once), double(ns_cerrojo) / 1e6,
+                  double(ns_max) / 1e3, double(ns_aviso) / 1e6);
+    }
     reg_mem_waits_ = 0;
     reg_mem_wait_ns_ = 0;
 #if GOW2_DEKO3D
+    hitch_espera_anillo_prev_ = 0;
     const gow2::shaders::Estadisticas s = gow2::shaders::Global().estadisticas();
     REXLOG_INFO("[gpu] shaders: {} loads (address {}, address refused {}, learned {}, microcode {}, similar {}, "
                 "unknown {}); objects {} ({} not in the library, {} without a microcode address)",
@@ -789,10 +1122,86 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       const xmow::perf::Contadores p = xmow::perf::LeerContadores();
       REXLOG_INFO("[xmow perf] {:.1f} s: {} shader loads reused (xmow_imload_rapido, not in the loads above); {} "
                   "Direct3D spin waits yielded ({:.1f} ms); {} occlusion GetData answered at once; per-draw "
-                  "diagnostics {}",
+                  "diagnostics {}; query boxes skipped {} (xmow_pular_caixas_consulta); log lines dropped so far {} "
+                  "(log_async {}); frame throttle (Direct3D sub_82B3CFD0, xmow_d3d_quadros_adiante {}): {} waits, "
+                  "{:.1f} ms",
                   seconds, imload_rapidas_, p.esperas, double(p.esperas_us) / 1000.0, p.consultas,
-                  diag_activo_ ? "on" : "off (the draw targets / primitive types / indices below are not counted)");
+                  diag_activo_ ? "on" : "off (the draw targets / primitive types / indices below are not counted)",
+                  caixas_omitidas_ - reported_caixas_, rex::LogLineasDescartadas(),
+                  rex::LogIsAsync() ? "on" : "off", REXCVAR_GET(xmow_d3d_quadros_adiante), p.freno,
+                  double(p.freno_us) / 1000.0);
+      // 0.1.30 (xmow_d3d_nativo)
+      REXLOG_INFO("[xmow perf] {:.1f} s: Direct3D state copies done natively (xmow_d3d_nativo {}): shader constants {} "
+                  "calls, {} registers; register blocks {} calls, {} registers; runs through Direct3D's slow path {}",
+                  seconds, REXCVAR_GET(xmow_d3d_nativo), p.nativo_constantes, p.nativo_constantes_regs,
+                  p.nativo_bloques, p.nativo_bloques_regs, p.nativo_lentos);
+      // 0.1.32 (xmow_sem_prepasso_motor)
+      if (REXCVAR_GET(xmow_sem_prepasso_motor) || p.prepaso_llamadas) {
+        std::string motivos;
+        if (p.prepaso_motivo & 1) motivos += " gow2_sin_prepaso_z off;";
+        if (p.prepaso_motivo & 2) motivos += " gow2_sin_prepaso_enmascarado off;";
+        if (p.prepaso_motivo & 4) motivos += " occlusion queries issued;";
+        if (p.prepaso_motivo & 8) motivos += " GUseTilingCode set;";
+        REXLOG_INFO("[xmow perf] {:.1f} s: engine depth prepass (xmow_sem_prepasso_motor {}): {} RenderPrePass calls, "
+                    "{} view draw lists left out, {} calls run whole because:{}",
+                    seconds, REXCVAR_GET(xmow_sem_prepasso_motor), p.prepaso_llamadas, p.prepaso_listas_omitidas,
+                    p.prepaso_bloqueados, motivos.empty() ? std::string(" -") : motivos);
+      }
+      xmow::cpu33::Informe(seconds);  // 0.1.33: "[xmow cpu33]" lines
+      {
+        // 0.1.26 (item 1c): the draws sent to the renderer per frame by what they write and how they blend (ClaseDelDibujo).
+        const double q = double(std::max<uint64_t>(quadros_intervalo, 1));
+        uint64_t enviados = 0;
+        for (const uint64_t n : censo_) enviados += n;
+        REXLOG_INFO("[xmow census] {:.1f} s, {} frames, per frame: {:.0f} draws sent to the renderer: opaque {:.0f}, "
+                    "additive {:.0f}, alpha blend {:.0f}, modulated {:.0f}, other blend {:.0f}, depth/stencil only "
+                    "{:.0f}, inert (no color, depth or stencil write) {:.0f} ({:.0f} of them drawn by the renderer); "
+                    "query boxes skipped before it {:.0f}; inert draws skipped before it {:.0f} (xmow_pular_inertes "
+                    "{}); draws scissored to 1 pixel {:.0f}, draws emptied {:.0f} (xmow_diag_custo_dibujo {}, "
+                    "xmow_diag_tijera_1px {}); depth prepass draws not sent {:.0f} (gow2_sin_prepaso_z {}, "
+                    "gow2_sin_prepaso_enmascarado {})",
+                    seconds, quadros_intervalo, double(enviados) / q, double(censo_[kClaseOpaco]) / q,
+                    double(censo_[kClaseAditivo]) / q, double(censo_[kClaseAlfa]) / q,
+                    double(censo_[kClaseModulado]) / q, double(censo_[kClaseOtraMezcla]) / q,
+                    double(censo_[kClaseSoloProfundidad]) / q, double(censo_[kClaseInerte]) / q,
+                    double(censo_inertes_dibujados_) / q, double(caixas_omitidas_ - reported_caixas_) / q,
+                    double(inertes_omitidos_) / q, REXCVAR_GET(xmow_pular_inertes),
+                    double(tijera_1px_dibujos_) / q, double(vacios_dibujos_) / q,
+                    REXCVAR_GET(xmow_diag_custo_dibujo), REXCVAR_GET(xmow_diag_tijera_1px),
+                    double(prepass_skipped_ - reported_prepass_skipped_) / q, REXCVAR_GET(gow2_sin_prepaso_z),
+                    REXCVAR_GET(gow2_sin_prepaso_enmascarado));
+        reported_prepass_skipped_ = prepass_skipped_;  // 0.1.31: counted since 0.1.x, printed now
+        inertes_omitidos_ = 0;
+        tijera_1px_dibujos_ = 0;
+        vacios_dibujos_ = 0;
+        censo_ = {};
+        censo_inertes_dibujados_ = 0;
+      }
       imload_rapidas_ = 0;
+      reported_caixas_ = caixas_omitidas_;
+      // xmow_oclusao_conservadora: what the history answered and what the GPU counted in this interval.
+      if (REXCVAR_GET(xmow_oclusao_conservadora) || oc_.ocultas || oc_.visibles || !oc_historial_.empty()) {
+        REXLOG_INFO("[xmow occlusion] {:.1f} s: conservative {} (retest every {} frames); queries answered {} hidden, {} "
+                    "visible ({} with no box, {} with no key, {} with a draw that paints); GetData {} read from the "
+                    "ring, {} answered visible at once (the ring was not there yet); query boxes {} drawn and counted, "
+                    "{} skipped; GPU counts {} back ({} late, 2+ frames), {} discarded for an invalid depth (pending "
+                    "clear or contenido_invalido), {} given up, {} still out; history {} keys, {} clears, {} prunes",
+                    seconds, REXCVAR_GET(xmow_oclusao_conservadora) ? "on" : "off",
+                    REXCVAR_GET(xmow_oclusao_reteste_quadros), oc_.ocultas, oc_.visibles, oc_.sin_caja, oc_.sin_clave,
+                    oc_.pinta, p.consultas_anillo, p.consultas_tarde, oc_.dibujadas, oc_.saltadas, oc_.cuentas,
+                    oc_.atrasadas, oc_.z_invalidas, oc_.perdidas, oc_pendientes_.size(), oc_historial_.size(),
+                    oc_.limpiezas, oc_.podas);
+      }
+      const uint64_t zpd_fotograma = oc_.zpd_fotograma;
+      oc_ = {};
+      oc_.zpd_fotograma = zpd_fotograma;
+      // xmow_log_hitch_ms: the slow frames of this interval, collected by HitchPorSwap (on this thread), written here.
+      for (const std::string& linha : hitch_linhas_) REXLOG_INFO("{}", linha);
+      if (hitch_suprimidas_) {
+        REXLOG_INFO("[xmow hitch] {} more slow frames in this interval not listed (20 lines per 10 s)", hitch_suprimidas_);
+      }
+      hitch_linhas_.clear();
+      hitch_suprimidas_ = 0;
     }
     // What the draws sent to the renderer target and draw (ColorRenderTargetFormat of each written color
     // target, DepthRenderTargetFormat when depth is on, primitive type): the formats it does not handle yet show
@@ -845,8 +1254,15 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     gow2_log_main_thread();
     REXLOG_INFO("[gpu] draws: {} geometry, {} sent to the renderer: {} drawn, {} rejected by it; skipped here: "
                 "{} without VS, {} without PS (the renderer logs each rejection cause once); {} left out by "
-                "xmow_omitir_ps",
-                geometria_, enviados_, dibujados, rechazados, sin_vs_, sin_ps_, omitidos_ps_);
+                "xmow_omitir_ps, {} height fog draws left out by xmow_niebla_altura",
+                geometria_, enviados_, dibujados, rechazados, sin_vs_, sin_ps_, omitidos_ps_, omitidos_niebla_);
+    {
+      const gow2::shaders::Biblioteca::Lecturas lec = gow2::shaders::Global().lecturas();
+      REXLOG_INFO("[shaders] SPIR-V reads (since boot): reader thread {} ({} of them preloaded for the map, {:.0f} ms), "
+                  "ring or create hooks {:.0f} ms; {} draws skipped while their shader was being read",
+                  lec.fondo, lec.precargadas, double(lec.ns_fondo) / 1e6, double(lec.ns_en_el_acto) / 1e6,
+                  spirv_no_lista_);
+    }
     if (destinos_) {
       uint64_t q[5];
       destinos_->EstadisticasOclusion(q);
@@ -947,6 +1363,10 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       case xenos::PM4_XE_SWAP:
 #if GOW2_DEKO3D
         FrameTraceSwap();
+        HitchPorSwap();
+        query_aberta_ = false;  // a query left open (its end never seen) must not drop the next frame's draws
+        composicao_final_logada_ = false;
+        OclusionConservadoraSwap();  // xmow_oclusao_conservadora: history upkeep (before swaps_ moves on)
 #endif
         // VdSwap writes "SWAP", the frontbuffer's physical address and its size. The renderer presents whatever is
         // resolved (clears and, once the ring decoder feeds draws, the frame). Handheld 1280x720.
@@ -961,7 +1381,11 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
         }
         if (EnsureRenderer()) {
           // VdSwap describes the frontbuffer in fetch constant 0; an empty TexturaSwap finds nothing (black).
-          destinos_->Presentar(presenter_.get(), rex::x360::LeerTexturaSwap(registers_.data()), 1280, 720);
+          {
+            const uint64_t t = NsAnillo();  // xmow 1031
+            destinos_->Presentar(presenter_.get(), rex::x360::LeerTexturaSwap(registers_.data()), 1280, 720);
+            anillo_.presentar += NsAnillo() - t;
+          }
           if (REXCVAR_GET(switch_omitir_pedido) && REXCVAR_GET(gow2_velocidad_prueba)) {
             REXCVAR_SET(switch_omitir_pedido, false);
             REXCVAR_SET(gow2_velocidad_sin_z, !REXCVAR_GET(gow2_velocidad_sin_z));
@@ -1019,20 +1443,74 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
             REXLOG_INFO("[gpu] capture above: skip mode {} ({})", skip_mode_, SkipModeName());
             // Gears of War 2: the mode stays on screen until the next press (one frame was too short to see it).
           }
+          // 0.1.34: PLAY MODE (xmow_bench.cpp) first: it decides whether stack sampling may be on.
+          xmow::bench::AplicarModoJogo();
+          if ((REXCVAR_GET(xmow_amostragem_pilas) && !xmow::bench::ModoJogoEfetivo()) != RexSwitchPerfStacksActive()) {
+            RexSwitchPerfToggleStacks();
+            REXLOG_INFO("[xmow perf] stack sampling {}", RexSwitchPerfStacksActive() ? "on" : "off");
+          }
+          // 0.1.26: the raw samples' writer and cap (switch_perf.cpp), handed over again when the cap changes.
+          if (const int32_t mb = REXCVAR_GET(xmow_amostragem_volcado_mb); mb != volcado_pilhas_mb_) {
+            volcado_pilhas_mb_ = mb;
+            RexSwitchPerfFijarVolcadoCrudo(&EscritorPilhas, unsigned(std::max(mb, 0)));
+            REXLOG_INFO("[xmow perf] raw stack samples to logs/rex/rex_pilhas.bin: cap {} MB per boot (while stack "
+                        "sampling is on; the two busiest threads sampled every millisecond)", mb);
+          }
+          // 0.1.29 (xmow_l3r3_volcado_completo off, the default): L3 + R3 is a screen capture only (cap_NNN.bmp, as
+          // switch_captura_pedida), no dump and no trace (test 35: a dump with the level streaming froze it 11 s).
+          if (REXCVAR_GET(switch_volcado_pedido) && !REXCVAR_GET(xmow_l3r3_volcado_completo)) {
+            REXCVAR_SET(switch_volcado_pedido, false);
+            REXLOG_INFO("[xmow capture] L3 + R3: screen capture of the presented frame (xmow_l3r3_volcado_completo "
+                        "off: no dump)");
+            SaveCapture();
+          }
+          if (REXCVAR_GET(switch_volcado_pedido) &&
+              rex::x360::EscriturasSdPendientes() > g_pilhas_pendentes.load(std::memory_order_acquire)) {
+            // xmow 1031: a new L3 + R3 while the previous dump is still being written to the SD card is ignored (test
+            // 32: presses 3 s apart doubled the card's load while the game streamed the helicopter area).
+            REXCVAR_SET(switch_volcado_pedido, false);
+            REXLOG_INFO("[xmow dump] L3 + R3 ignored: the previous dump is still being written ({} SD writes pending)",
+                        rex::x360::EscriturasSdPendientes());
+          }
           if (REXCVAR_GET(switch_volcado_pedido)) {
             REXCVAR_SET(switch_volcado_pedido, false);
             destinos_->PedirVolcado();
             // And every draw of that frame in the log, whatever its size (FrameTraceSwap ends it at the next Swap).
             draw_tracing_ = true;
             draw_trace_n_ = 0;
+            draw_sum_on_ = true;  // 0.1.22: aggregate of every draw of the frame, logged when it ends
+            draw_sum_.clear();
+            draw_sum_total_ = 0;
             draw_trace_cap_ = 1200;  // XMOW: 3000 draws with their details took ~35 s of a menu frame on the SD
             packet_trace_n_ = 0;
             REXLOG_INFO("[draws] full trace of the next frame (ZL + ZR + Left)");
+            captura_final_en_ = swaps_ + 1;  // the presented frame is saved at the Swap that ends the dumped one
           }
           AutomaticCollection();
+          // L3 + R3: the final presented frame (capturas/cap_NNN.bmp), taken at the Swap that ends the dumped frame,
+          // after its Presentar and outside any draw (the capture is written to the SD on the writer thread).
+          if (captura_final_en_ && swaps_ >= captura_final_en_) {
+            captura_final_en_ = 0;
+            REXLOG_INFO("[xmow dump] presented final frame of the dumped one (PS 6971 inputs are in the [draws] trace)");
+            SaveCapture();
+          }
           if (REXCVAR_GET(switch_captura_pedida)) {
             REXCVAR_SET(switch_captura_pedida, false);
             SaveCapture();
+          }
+          // 0.1.34: the bench (advanced menu > TESTS): its steps, its windows and its captures of the presented frame.
+          xmow::bench::PorSwap(draws_);
+          if (xmow::bench::QuiereCaptura()) {
+            rex::ui::RawImage imagen;
+            std::vector<uint32_t> crudo;  // 0.1.34c: the RGB10A2 texels too, for the exact compare
+#if GOW2_DEKO3D
+            rex::ui::PedirCapturaCruda(&crudo);
+#endif
+            const bool ok = presenter_ && presenter_->CaptureGuestOutput(imagen);
+#if GOW2_DEKO3D
+            rex::ui::PedirCapturaCruda(nullptr);
+#endif
+            xmow::bench::Captura(ok ? &imagen : nullptr, ok ? &crudo : nullptr);
           }
         }
 #if GOW2_DEKO3D
@@ -1292,7 +1770,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
                         (Register(g::XE_GPU_REG_RB_COPY_DEST_PITCH) >> 16) & 0x3FFF,
                         (Register(g::XE_GPU_REG_RB_COPY_DEST_INFO) >> 7) & 0x3F);
           }
-          destinos_->Copiar(rex::x360::LeerRegistrosCopia(registers_.data()));
+          CopiarMedido(rex::x360::LeerRegistrosCopia(registers_.data()));
           break;
         }
         Draw();
@@ -1441,6 +1919,101 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       REXLOG_INFO("[gpu] xmow_omitir_ps: {} pixel shaders", omitir_ps_.size());
     }
     return numero / 64 < omitir_ps_bits_.size() && ((omitir_ps_bits_[numero / 64] >> (numero % 64)) & 1);
+  }
+  // xmow_niebla_altura (quick menu HEIGHT FOG): whether this draw of the full-screen height fog (PS n2639, UE3's
+  // HeightFogPixelShader: rgb = (1 - T) * FogInScattering * 8, alpha = T, blended ONE x SRC_ALPHA into the 7e3 scene)
+  // is left out. 1 = always drawn, 2 = never, 0 = AUTO: drawn everywhere, the frontend too (0.1.20: the 360's main menu
+// is the blue water look of this fog); the frontend detection below is kept for the log only.
+  // The frontend is told by the fog's own pixel shader constants, read at this draw (free: they are in registers_):
+  // the main menu's fog (WStart, tests 12-22) is c3.x = FogDistanceScale -0.0218, c4.x = FogExtinctionDistance 500,
+  // c6.x = FogStartDistance 0 and c7.x = 0 (the transmittance beyond the extinction distance: fully fogged); every
+  // gameplay fog logged is about 1500 times thinner (c3.x -1.44e-05 / -7.2e-05), with c4.x 50000, c6.x 1000 and
+  // c7.x 1. With the camera inside the fog band (VS c7 - c4.z = 307 units over it), the menu's fog covers ~70% of the
+  // pixels with its blue (simulated on the depth of test 25's dump) and the frames with and without a usable depth
+  // alternate: the flash. The map log ([XMOW mapa], SDK) only names a package the first time it is opened, so it
+  // cannot tell a return to the main menu.
+  static constexpr uint32_t kPsNieblaAltura = 2639;
+  float ConstantePs(uint32_t c, uint32_t componente) const {
+    return std::bit_cast<float>(registers_[0x4000 + (256 + c) * 4 + componente]);
+  }
+  // 0.1.32: 2 (NO) leaves the fog out only on gameplay maps: drawn while the fog's constants are the frontend's or the
+  // last map package opened is not a gameplay one (before the first map, WStart.xxx), so the title and menus keep
+  // their blue water look (test 38: NO everywhere ruined the main menu).
+  bool NieblaAlturaOmitida() {
+    const int32_t modo = REXCVAR_GET(xmow_niebla_altura);
+    // 0.1.33d (review S-B): classified at every fog draw, with any xmow_niebla_altura (1 used to return here, so a
+    // return to the main menu was never seen with YES).
+    const float densidad = ConstantePs(3, 0), extincion = ConstantePs(4, 0), inicio = ConstantePs(6, 0),
+                mas_alla = ConstantePs(7, 0);
+    // Thresholds far from both sets of values: a fog 70 times denser than any gameplay one, fully opaque beyond an
+    // extinction distance under 2000 units.
+    const bool frontal = densidad < -0.001f && extincion > 0.0f && extincion < 2000.0f && mas_alla == 0.0f;
+    rex::x360::g_xmow_frontend.store(frontal ? 1 : 2, std::memory_order_relaxed);  // xmow 1031 ([xmow composite])
+    // 0.1.33c (review S2) / 0.1.33d (S-B): WStart.xxx is not known to be opened again on a return to the main menu
+    // (the package may stay loaded); the main menu's fog constants say it. Only counted here: the game thread puts the
+    // per map settings back to the frontend's at the start of a frame, after enough frontend fog frames in a row.
+    XmowNieblaClasificada(frontal);
+    if (frontal != niebla_frontal_) {
+      niebla_frontal_ = frontal;
+      if (frontal) {
+        REXLOG_INFO("[xmow fog] frontend detected (height fog drawn, xmow_niebla_altura {})", modo);
+      } else {
+        REXLOG_INFO("[xmow fog] frontend left (height fog {}, xmow_niebla_altura {})",
+                    modo == 2 && XmowMapaDeJogo() ? "left out: gameplay map" : "drawn", modo);
+      }
+      REXLOG_INFO("[xmow fog] fog constants: distance scale {:g}, extinction distance {:g}, start distance {:g}, "
+                  "transmittance beyond extinction {:g}",
+                  densidad, extincion, inicio, mas_alla);
+    }
+    // YES (1) and AUTO (0) draw the fog everywhere; NO (2) leaves it out on gameplay maps only (0.1.32).
+    return modo == 2 && !frontal && XmowMapaDeJogo();
+  }
+  // xmow_pular_caixas_consulta: the draw about to be sent writes nothing: no color channel (depth only mode 5, or
+  // RB_COLOR_MASK 0 for every target), no depth (RB_DEPTHCONTROL bit 2, Z write enable) and no stencil (stencil test
+  // enabled, bit 0, with a non-zero write mask, RB_STENCILREFMASK bits 16-23: kept to be safe, as it may be a mask).
+  // 0.1.33c (review S5): stencil written by the front faces (RB_STENCILREFMASK write mask, bits 16-23) or, with two
+  // sided stencil (RB_DEPTHCONTROL bit 7, backface enable), by the back faces (RB_STENCILREFMASK_BF).
+  bool EscreveEstencil(uint32_t profundidade) const {
+    namespace g = rex::graphics;
+    if ((profundidade & 0x1) == 0) return false;
+    if (((Register(g::XE_GPU_REG_RB_STENCILREFMASK) >> 16) & 0xFF) != 0) return true;
+    return (profundidade & 0x80) != 0 && ((Register(g::XE_GPU_REG_RB_STENCILREFMASK_BF) >> 16) & 0xFF) != 0;
+  }
+  bool CaixaDeConsulta() const {
+    namespace g = rex::graphics;
+    const uint32_t modo = Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7;
+    const uint32_t profundidade = Register(g::XE_GPU_REG_RB_DEPTHCONTROL);
+    const bool sem_cor = modo == 5 || (Register(g::XE_GPU_REG_RB_COLOR_MASK) & 0xFFFF) == 0;
+    const bool escreve_z = (profundidade & 0x4) != 0;
+    return sem_cor && !escreve_z && !EscreveEstencil(profundidade);
+  }
+  // 0.1.26 (pesquisa-fps-picos.md item 1c): what a draw sent to the renderer writes and how it blends into color target 0
+  // (RB_BLENDCONTROL0: source factor bits 0-4, destination bits 8-12; Xenos factors 0 ZERO, 1 ONE, 4 SRC_COLOR,
+  // 6 SRC_ALPHA, 7 ONE_MINUS_SRC_ALPHA, 8 DST_COLOR). Inert = no color channel, no depth write and no stencil write (the
+  // renut skip_inert_draws idea; memexport is not checked: the shader entries do not record it). The same test as
+  // CaixaDeConsulta, outside a query.
+  enum ClaseDibujo : uint8_t {
+    kClaseOpaco, kClaseAditivo, kClaseAlfa, kClaseModulado, kClaseOtraMezcla, kClaseSoloProfundidad, kClaseInerte,
+    kClases
+  };
+  static constexpr const char* kNombresClase[kClases] = {"opaque", "additive", "alpha", "modulated", "other blend",
+                                                         "depth/stencil only", "inert"};
+  uint8_t ClaseDelDibujo() const {
+    namespace g = rex::graphics;
+    const uint32_t modo = Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7;
+    const uint32_t profundidade = Register(g::XE_GPU_REG_RB_DEPTHCONTROL);
+    const bool cor = modo != 5 && (Register(g::XE_GPU_REG_RB_COLOR_MASK) & 0xFFFF) != 0;
+    if (!cor) {
+      const bool escreve_z = (profundidade & 0x4) != 0;
+      return escreve_z || EscreveEstencil(profundidade) ? kClaseSoloProfundidad : kClaseInerte;
+    }
+    const uint32_t mezcla = Register(g::XE_GPU_REG_RB_BLENDCONTROL0);
+    const uint32_t src = mezcla & 0x1F, dst = (mezcla >> 8) & 0x1F;
+    if (src == 1 && dst == 0) return kClaseOpaco;
+    if (dst == 1) return kClaseAditivo;  // ONE x ONE, SRC_ALPHA x ONE: per-light passes, glows
+    if (src == 6 && dst == 7) return kClaseAlfa;
+    if ((src == 8 && dst == 0) || (src == 0 && dst == 4)) return kClaseModulado;  // DST_COLOR x ZERO, ZERO x SRC_COLOR
+    return kClaseOtraMezcla;
   }
   static void LeerListaNumeros(const std::string& lista, std::vector<uint32_t>& salida) {
     uint32_t v = 0;
@@ -1740,6 +2313,14 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     // color) is taken for a clear. Test 12: the game's own full-screen rectangles (VS n3807 with PS n12752 / n8672,
     // which copy the resolved scene color and depth back into the EDRAM before the lights) were emulated as clears
     // with their c0 = (8 0 0 0) as the color: the whole scene turned red. Those are drawn (ExpandRectList).
+    // 0.1.27 (xmow_spirv_lectura_fondo): a shader met for the first time has its SPIR-V read on the library's reader
+    // thread; until then its samplers (below, also for a depth-only rectangle) and SPIR-V must not be read, and the
+    // draw is skipped, as with a DKSH being read. The vertex shader is checked after the clears (they do not need it).
+    if (ps_ && !gow2::shaders::Global().Lista(ps_)) {
+      ++spirv_no_lista_;
+      if (draw_tracing_) DrawTraceLine(false, "PS SPIR-V still being read");
+      return;
+    }
     const uint32_t rect_mask = Register(g::XE_GPU_REG_RB_COLOR_MASK);
     const bool rect_copy_blend = (Register(g::XE_GPU_REG_RB_BLENDCONTROL0) & 0x1FFF1FFF) == 0x00010001;
     const bool d3d_rect = (initiator & 0x3F) == 8 && REXCVAR_GET(xmow_rectangulos_como_borrado) &&
@@ -1783,6 +2364,11 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       ++sin_ps_;
       return;
     }
+    if (!gow2::shaders::Global().Lista(vs_)) {  // 0.1.27, see above
+      ++spirv_no_lista_;
+      if (draw_tracing_) DrawTraceLine(false, "VS SPIR-V still being read");
+      return;
+    }
     // gow2_sin_prepaso_z: the scene's depth prepass (depth-only draws writing the depth buffer at EDRAM 000) is not
     // drawn; the base pass that follows tests GEQUAL and writes depth itself, so it ends up the same.
     if (REXCVAR_GET(gow2_sin_prepaso_z) && skip_mode_ != 8 && (Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7) == 5 &&
@@ -1798,9 +2384,52 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       ++prepass_skipped_;
       return;
     }
+    if (ps_ && ps_->numero == kPsNieblaAltura && NieblaAlturaOmitida()) {
+      ++omitidos_niebla_;
+      return;
+    }
     if (ps_ && EnListaOmitir(ps_->numero)) {
       ++omitidos_ps_;
       return;
+    }
+    // xmow_pular_caixas_consulta: inside an occlusion query (begin seen, end not yet), a draw that writes no color, no
+    // depth and no stencil is the query's box: it cannot change the image and its result is faked visible anyway.
+    // Real occlusion (gow2_oclusion_real) never gets here with the flag set (OcclusionQuery).
+    // xmow_oclusao_conservadora: the box is drawn (and counted) only when the query's history asks for a count
+    // (CajaConservadora); a draw inside the query that is not a box keeps the query out of the history.
+    if (query_aberta_ && oc_abierta_) {
+      if (CaixaDeConsulta()) {
+        if (!CajaConservadora()) {
+          ++caixas_omitidas_;
+          ++frame_caixas_;
+          return;
+        }
+      } else {
+        oc_pinta_ = true;
+      }
+    } else if (query_aberta_ && REXCVAR_GET(xmow_pular_caixas_consulta) && CaixaDeConsulta()) {
+      ++caixas_omitidas_;
+      ++frame_caixas_;
+      return;
+    }
+    // 0.1.29 (xmow_pular_inertes): outside any occlusion query, a draw that writes no color, no depth and no stencil
+    // (CaixaDeConsulta, the census' inert class: ~96 per frame in test 35, all drawn by the renderer, whose own
+    // nfsmw_nativo_saltar_invisibles keeps draws with a depth or stencil test) cannot change the image: the renderer
+    // has no memexport. Real occlusion counts draws; the probe frame and the traced frame keep everything.
+    if (REXCVAR_GET(xmow_pular_inertes) && !query_aberta_ && !oc_abierta_ && !probing_ && !draw_tracing_ &&
+        !REXCVAR_GET(gow2_oclusion_real) && CaixaDeConsulta()) {
+      ++inertes_omitidos_;
+      return;
+    }
+    // L3 + R3 dump frame: the final composite's (PS 6971) textures and constants c0-c15, in full, once.
+    if (draw_tracing_ && ps_ && ps_->numero == 6971 && !composicao_final_logada_) {
+      composicao_final_logada_ = true;
+      const uint32_t n = draw_trace_n_, cap = draw_trace_cap_;
+      draw_trace_n_ = 0;
+      draw_trace_cap_ = 1;
+      DrawTraceLine(true, "XMOW final composite (PS 6971) inputs");
+      draw_trace_n_ = n;
+      draw_trace_cap_ = cap;
     }
     if (skip_mode_ > 1 && SkippedByMode()) {
       ++skipped_by_mode_;
@@ -1918,6 +2547,10 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     request.generacion_vs = generacion_vs_;
     request.generacion_constantes_vs = generacion_constantes_vs_;
     request.generacion_constantes_ps = generacion_constantes_ps_;
+    // xmow 1034: the constant registers changed since the last draw handed to the renderer (reset after Dibujar).
+    request.constantes_sucias_validas = true;
+    std::memcpy(request.sucias_vs, sucias_vs_, sizeof(sucias_vs_));
+    std::memcpy(request.sucias_ps, sucias_ps_, sizeof(sucias_ps_));
     request.generacion_fetch = generacion_fetch_;
     request.generacion_encuadre = generacion_encuadre_;
     ++enviados_;
@@ -1934,6 +2567,27 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       ++generacion_encuadre_;
       request.generacion_encuadre = generacion_encuadre_;
       destinos_->EmpezarOclusion(probe_key);
+    }
+    // 0.1.29 (xmow_diag_tijera_1px, diagnostic): this draw only into the pixel at 0,0 (window scissor 0,0-1,1), as the
+    // probe frame does with its square: the GPU keeps each draw's fixed work and shades almost nothing.
+    // 0.1.30 (xmow_diag_custo_dibujo): 1 = this pixel scissor, 2 = EMPTY (all of the state, 0 vertices; the SDK
+    // honours PeticionDibujo::vacio where it emits the draw).
+    const int32_t custo_dibujo = REXCVAR_GET(xmow_diag_custo_dibujo);
+    const bool tijera_1px = !probe && (custo_dibujo == 1 || (custo_dibujo <= 0 && REXCVAR_GET(xmow_diag_tijera_1px)));
+    if (!probe && custo_dibujo == 2) {
+      request.vacio = true;
+      ++vacios_dibujos_;
+    }
+    if (!probe && custo_dibujo == 3) request.un_triangulo = true;  // 0.1.33c: ONE TRIANGLE (first triangle only)
+    uint32_t tijera_tl = 0, tijera_br = 0;
+    if (tijera_1px) {
+      tijera_tl = registers_[g::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL];
+      tijera_br = registers_[g::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR];
+      registers_[g::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL] = 0x80000000u;
+      registers_[g::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR] = 0x80000000u | (1u << 16) | 1u;
+      ++generacion_encuadre_;
+      request.generacion_encuadre = generacion_encuadre_;
+      ++tijera_1px_dibujos_;
     }
     // gow2_velocidad_sin_z: the velocity buffer's draws without their depth test (z enable off for this draw).
     const bool velocity_no_z = REXCVAR_GET(gow2_ajustes_gears2) && REXCVAR_GET(gow2_velocidad_sin_z) && ps_ &&
@@ -1955,6 +2609,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       }
       ++generacion_constantes_vs_;
       request.generacion_constantes_vs = generacion_constantes_vs_;
+      request.sucias_vs[0] |= uint64_t(1) << 10;  // c10
     }
     if (tree_identity) {
       for (uint32_t i = 0; i < 48; ++i) {
@@ -1963,18 +2618,33 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       }
       ++generacion_constantes_vs_;
       request.generacion_constantes_vs = generacion_constantes_vs_;
+      request.sucias_vs[0] |= ((uint64_t(1) << 12) - 1) << 11;  // c11-c22
     }
+    const uint8_t clase = ClaseDelDibujo();  // 0.1.26: census of the 10 s report ([xmow census])
+    ++censo_[clase];
+    const uint64_t t_dibujar = NsAnillo();  // xmow 1031
     const bool drawn = destinos_->Dibujar(request);
+    anillo_.dibujar += NsAnillo() - t_dibujar;
+    std::memset(sucias_vs_, 0, sizeof(sucias_vs_));  // xmow 1034: handed over
+    std::memset(sucias_ps_, 0, sizeof(sucias_ps_));
+    if (clase == kClaseInerte && drawn) ++censo_inertes_dibujados_;
     if (tree_identity) {
       for (uint32_t i = 0; i < 48; ++i) registers_[0x4000 + 11 * 4 + i] = saved_sway[i];
       ++generacion_constantes_vs_;
+      sucias_vs_[0] |= ((uint64_t(1) << 12) - 1) << 11;  // xmow 1034: c11-c22 back to the game's
     }
     if (tree_c10_zero) {
       for (uint32_t i = 0; i < 4; ++i) registers_[0x4000 + 10 * 4 + i] = saved_c10[i];
       ++generacion_constantes_vs_;
+      sucias_vs_[0] |= uint64_t(1) << 10;  // xmow 1034: c10 back to the game's
     }
     if (velocity_no_z) {
       registers_[g::XE_GPU_REG_RB_DEPTHCONTROL] = saved_depthcontrol;
+      ++generacion_encuadre_;
+    }
+    if (tijera_1px) {
+      registers_[g::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL] = tijera_tl;
+      registers_[g::XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR] = tijera_br;
       ++generacion_encuadre_;
     }
     if (probe) {
@@ -1985,6 +2655,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       probes_.push_back({uint32_t(probes_.size()), vs_ ? vs_->numero : 0, ps_->numero,
                          Register(g::XE_GPU_REG_VGT_DRAW_INITIATOR) >> 16, ticket, UINT64_MAX});
     }
+    if (draw_sum_on_) DrawSumAdd(clase);
     if (draw_tracing_) DrawTraceLine(drawn);
     if (msaa) {
       ++generacion_encuadre_;  // back to the mirror's for the next draw
@@ -2266,6 +2937,10 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     // scene's depth in the middle of the frame. Bit 30 of RB_COPY_CONTROL (unused by the Xenos) tells the renderer
     // (SDK patch 0030).
     const bool stencil_only = !(depth_control & 0x4) && (depth_control & 0x1);
+    // xmow 1034 (xmow_registro_barato): `what` is only for the two logs below; once both are done (32 shapes seen, the
+    // first 12 + 8 clear lines written) it is not built, nor kept in clear_shapes_. Same log text.
+    const bool describir = !REXCVAR_GET(xmow_registro_barato) || clear_shapes_.size() < 32 ||
+                           (msaa ? clears_logged_ < 12 : clears_logged_1x_ < 8);
     auto clear_depth_at = [&](uint32_t edram_base, std::string& what, bool only_stencil = false) {
       // The direction of the draws into this depth buffer when it has any, the frame's otherwise.
       bool reversed_here = reversed;
@@ -2279,8 +2954,10 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       c.rb_depth_info = (depth_info & ~uint32_t(0xFFF)) | (edram_base & 0xFFF);
       c.rb_copy_control = 4u | (1u << 9) | kNullCommand | (only_stencil ? 1u << 30 : 0u);
       c.rb_depth_clear = depth_value;
-      destinos_->Copiar(c);
-      what += fmt::format(" z={:03X}->{:08X}{}", edram_base & 0xFFF, depth_value, only_stencil ? " (stencil only)" : "");
+      CopiarMedido(c);
+      if (describir) {
+        what += fmt::format(" z={:03X}->{:08X}{}", edram_base & 0xFFF, depth_value, only_stencil ? " (stencil only)" : "");
+      }
     };
     std::string what;
     const uint32_t c0_base = base.rb_color_info[0] & 0xFFF;
@@ -2318,9 +2995,11 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       c.rb_copy_control = 0u | (1u << 8) | kNullCommand | (color_as_bits ? 1u << 31 : 0u);
       c.rb_color_clear = color;
       c.rb_color_clear_lo = 0;
-      destinos_->Copiar(c);
-      what += fmt::format(" c0={:03X}", c0_base);
-      if (color) what += fmt::format("={:08X}", color);
+      CopiarMedido(c);
+      if (describir) {
+        what += fmt::format(" c0={:03X}", c0_base);
+        if (color) what += fmt::format("={:08X}", color);
+      }
     }
     uint32_t aliased_depth[3] = {};
     uint32_t n_aliased = 0;
@@ -2356,12 +3035,12 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
         c.rb_copy_control = 0u | (1u << 8) | kNullCommand | (1u << 31);
         c.rb_color_clear = bits;
         c.rb_color_clear_lo = bits;
-        destinos_->Copiar(c);
-        what += fmt::format(" c0={:03X}={:08X} (by the depth over it)", c0_base, bits);
+        CopiarMedido(c);
+        if (describir) what += fmt::format(" c0={:03X}={:08X} (by the depth over it)", c0_base, bits);
       }
     }
     ++clears_;
-    if (clear_shapes_.insert(what).second && clear_shapes_.size() <= 32) {
+    if (describir && clear_shapes_.insert(what).second && clear_shapes_.size() <= 32) {
       REXLOG_INFO("[gpu] clear shape: msaa {}, mode {}:{}", msaa, r[g::XE_GPU_REG_RB_MODECONTROL] & 0x7, what);
     }
     // Single-sampled ones counted apart: they are new, and their game clear color (PS c0) tells whether 0 is right.
@@ -2513,9 +3192,8 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     file.insert(file.end(), data.begin(), data.end());
     const bool log = !small || auto_captures_ % 12 == 1;  // the automatic ones once a minute in the log
     rex::x360::EncolarEscrituraSd([path, file = std::move(file), log, w = image.width, h = image.height]() {
-      if (FILE* f = std::fopen(path.string().c_str(), "wb")) {
-        std::fwrite(file.data(), 1, file.size(), f);
-        std::fclose(f);
+      // xmow 1031: in pieces with pauses (xmow_volcado_trozo_kb / xmow_volcado_pausa_ms), as the dumps.
+      if (rex::x360::EscribirArchivoEnTrozos(path, file.data(), file.size())) {
         if (log) REXLOG_INFO("[gpu] capture: {} ({}x{})", path.string(), w, h);
       } else {
         REXLOG_WARN("[gpu] capture: could not write {}", path.string());
@@ -2523,6 +3201,194 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     });
   }
 
+  // 0.1.27 (xmow_precarga_mapa): at each Swap on the ring thread. The kernel names every UE3 package the game opens
+  // (sdk-g2 xboxkrnl_io.cpp, g_xmow_paquete_ue3); a persistent level ("<map>_p.xxx") makes it the current map. Before
+  // the first one the map is "frontend". On a change the shader library and the renderer save what they read from the
+  // card for the previous map and start reading the new one's list in the background (its loading screen is drawn
+  // meanwhile); every 30 s the current map's lists are saved again if they grew.
+  void MapaPorSwap(Clock::time_point agora) {
+    if (!REXCVAR_GET(xmow_precarga_mapa)) return;
+    std::string mapa;
+    {
+      std::lock_guard<std::mutex> l(MapaPendienteCandado());
+      mapa = MapaPendiente();
+    }
+    if (mapa.empty()) mapa = "frontend";
+    const bool cambio = mapa != mapa_actual_;
+    if (!cambio && agora - mapa_guardado_ < std::chrono::seconds(30)) return;
+    mapa_guardado_ = agora;
+    if (cambio) {
+      REXLOG_INFO("[xmow map] current map: {} (was {})", mapa, mapa_actual_.empty() ? "none" : mapa_actual_);
+      mapa_actual_ = mapa;
+    }
+    const std::filesystem::path carpeta = rex::filesystem::GetExecutableFolder() / "xmow_precarga";
+    gow2::shaders::Global().CambioDeMapa(mapa, carpeta);
+    if (destinos_) destinos_->MapaActual(mapa, carpeta);
+  }
+
+  // xmow_log_hitch_ms: called at each Swap on the ring thread, after FrameTraceSwap (last_frame_draws_ is the frame that
+  // ended). The line is only formatted into hitch_linhas_; Report writes them with the 10 s summary.
+  void HitchPorSwap() {
+    const auto agora = Clock::now();
+    const auto anterior = hitch_ultimo_swap_;
+    hitch_ultimo_swap_ = agora;
+    MapaPorSwap(agora);
+    const uint64_t caixas = frame_caixas_;
+    frame_caixas_ = 0;
+    const int32_t limite_ms = REXCVAR_GET(xmow_log_hitch_ms);
+    if (limite_ms <= 0 || !destinos_) {
+      return;
+    }
+    if (xmow::bench::ModoJogoEfetivo()) {  // 0.1.34: PLAY MODE, no slow frame lines (the deltas start again after it)
+      hitch_ressincronizar_ = true;
+      return;
+    }
+    const rex::x360::EstadisticasDibujos est = destinos_->EstadisticasDeDibujos();
+    const uint64_t subidas = est.subidas_textura;
+    // xmow 1031: the ring thread's time in this frame, by what it did (deltas of accumulators since the last Swap).
+    const TiempoAnillo a = anillo_;
+    TiempoAnillo d;
+    d.ocioso = a.ocioso - anillo_previo_.ocioso;
+    d.informe = a.informe - anillo_previo_.informe;
+    d.sondeos = a.sondeos - anillo_previo_.sondeos;
+    d.paquetes = a.paquetes - anillo_previo_.paquetes;
+    d.dibujar = a.dibujar - anillo_previo_.dibujar;
+    d.copiar = a.copiar - anillo_previo_.copiar;
+    d.presentar = a.presentar - anillo_previo_.presentar;
+    d.subidas = a.subidas - anillo_previo_.subidas;
+    anillo_previo_ = a;
+    const uint64_t r_informe = est.ns_informe - hitch_r_previo_[0], r_volcado = est.ns_volcado - hitch_r_previo_[1],
+                   r_cache = est.ns_lectura_cache - hitch_r_previo_[2],
+                   r_valla = est.ns_espera_valla - hitch_r_previo_[3],
+                   r_grabando = est.ns_grabando - hitch_r_previo_[4];
+    hitch_r_previo_ = {est.ns_informe, est.ns_volcado, est.ns_lectura_cache, est.ns_espera_valla, est.ns_grabando};
+    // 0.1.26 (SDK 1032): GPU busy (works minus waits for the next partial submit) of the works whose fence passed since
+    // the last Swap: the GPU work of a frame 2-3 frames back, not this one's.
+    const uint64_t gpu_ocupada = est.ns_gpu_trabajos > est.ns_gpu_espera_envio ? est.ns_gpu_trabajos - est.ns_gpu_espera_envio : 0;
+    const uint64_t gpu_ocupada_quadro = gpu_ocupada > hitch_gpu_prev_ns_ ? gpu_ocupada - hitch_gpu_prev_ns_ : 0;
+    hitch_gpu_prev_ns_ = gpu_ocupada;
+    const uint64_t espera_d3d_us = xmow::perf::EsperaD3dTotalUs();
+    if (reg_mem_wait_ns_ < hitch_espera_anillo_prev_) hitch_espera_anillo_prev_ = 0;  // Report zeroed it
+    const uint64_t texturas = subidas - hitch_subidas_prev_;
+    const double espera_anillo_ms = double(reg_mem_wait_ns_ - hitch_espera_anillo_prev_) / 1e6;
+    const double espera_d3d_ms = double(espera_d3d_us - hitch_espera_d3d_prev_us_) / 1000.0;
+    hitch_subidas_prev_ = subidas;
+    hitch_espera_anillo_prev_ = reg_mem_wait_ns_;
+    hitch_espera_d3d_prev_us_ = espera_d3d_us;
+    // 0.1.27: the shader library's SPIR-V reads (xmow_spirv_lectura_fondo) in this frame.
+    const gow2::shaders::Biblioteca::Lecturas lec = gow2::shaders::Global().lecturas();
+    const uint64_t spirv_esperas = spirv_no_lista_ - hitch_spirv_prev_[0];
+    const uint64_t spirv_en_el_acto = lec.ns_en_el_acto - hitch_spirv_prev_[1];
+    const uint64_t spirv_fondo = lec.ns_fondo - hitch_spirv_prev_[2];
+    hitch_spirv_prev_ = {spirv_no_lista_, lec.ns_en_el_acto, lec.ns_fondo};
+    if (anterior == Clock::time_point{} || std::exchange(hitch_ressincronizar_, false)) {
+      return;
+    }
+    const double ms = std::chrono::duration<double, std::milli>(agora - anterior).count();
+    if (ms <= double(limite_ms)) {
+      return;
+    }
+    if (hitch_linhas_.size() >= 20) {
+      ++hitch_suprimidas_;
+      return;
+    }
+    const double desde_o_inicio =
+        first_swap_ == Clock::time_point{} ? 0.0 : std::chrono::duration<double>(agora - first_swap_).count();
+    // xmow 1031: where the ring thread's time went (HELICOPTERO-opus.md section 4). "idle" is ring_cv_ with no PM4 to
+    // read (the game gave no work: the stall is elsewhere); "PM4 parse" is the packet loop minus draws, copies,
+    // present and WAIT_REG_MEM; "draws" includes the renderer's recording, its DKSH reads from the SD card, its waits for
+    // a work slot's fence and its 10 s report when a partial submit ran it; "present" includes the end of a frame dump.
+    const auto m = [](uint64_t ns) { return double(ns) / 1e6; };
+    const uint64_t reg_mem_ns = uint64_t(std::max(espera_anillo_ms, 0.0) * 1e6);
+    const uint64_t dentro = d.dibujar + d.copiar + d.presentar + reg_mem_ns;
+    const uint64_t parse = d.paquetes > dentro ? d.paquetes - dentro : 0;
+    const uint64_t contado = d.ocioso + d.informe + d.sondeos + d.paquetes + d.subidas;
+    const double sin_contar = std::max(0.0, ms - m(contado));
+    hitch_linhas_.push_back(fmt::format(
+        "[xmow hitch] at {:.1f} s: frame {:.1f} ms, {} draws, {} query boxes skipped, {} textures uploaded, ring wait "
+        "{:.1f} ms, game Direct3D spin wait {:.1f} ms; ring: idle {:.1f}, PM4 parse {:.1f}, draws {:.1f} (recording "
+        "{:.1f}, DKSH reads from the SD {:.1f}, slot fence waits {:.1f}), copies {:.1f}, present {:.1f} (dump end "
+        "{:.1f}), renderer 10 s report and cache save {:.1f}, gpu 10 s report {:.1f}, polls {:.1f}, upload waits {:.1f}, "
+        "not accounted {:.1f} ms; GPU busy {:.1f} ms (works read back during this frame); SPIR-V: {} draws skipped "
+        "waiting for it, read by the ring or the create hooks {:.1f} ms, by the reader thread {:.1f} ms",
+        desde_o_inicio, ms, last_frame_draws_, caixas, texturas, espera_anillo_ms, espera_d3d_ms, m(d.ocioso), m(parse),
+        m(d.dibujar), m(r_grabando), m(r_cache), m(r_valla), m(d.copiar), m(d.presentar), m(r_volcado), m(r_informe),
+        m(d.informe), m(d.sondeos), m(d.subidas), sin_contar, m(gpu_ocupada_quadro), spirv_esperas, m(spirv_en_el_acto),
+        m(spirv_fondo)));
+  }
+
+  // 0.1.22: one entry per (vs, ps, primitive, color target 0, depth target) of the L3 + R3 frame, every draw counted
+  // (not limited by draw_trace_cap_). Same identifiers as the [draws] debug line.
+  // 0.1.26 (item 1c): the key also has target 0's blend (RB_BLENDCONTROL0), the color write mask, the depth/stencil
+  // enables (RB_DEPTHCONTROL bits 0-2), the mode and the class (ClaseDelDibujo), and the log gives per-pass totals by
+  // class: the same mesh with several pixel shaders is UE3's base pass plus one additive pass per dynamic light, or not.
+  void DrawSumAdd(uint8_t clase) {
+    namespace g = rex::graphics;
+    const uint32_t init = Register(g::XE_GPU_REG_VGT_DRAW_INITIATOR);
+    const uint64_t vs = uint64_t(vs_ ? int(vs_->numero) + 1 : 0) & 0xFFFF;
+    const uint64_t ps = uint64_t(ps_ ? int(ps_->numero) + 1 : 0) & 0xFFFF;
+    const uint64_t c0 = Register(g::XE_GPU_REG_RB_COLOR_INFO) & 0xFFF;
+    const uint64_t z = Register(g::XE_GPU_REG_RB_DEPTH_INFO) & 0xFFF;
+    const uint64_t chave = vs | (ps << 16) | (uint64_t(init & 0x3F) << 32) | (c0 << 38) | (z << 50);
+    const uint64_t modos = uint64_t(Register(g::XE_GPU_REG_RB_BLENDCONTROL0)) |
+                           (uint64_t(Register(g::XE_GPU_REG_RB_COLOR_MASK) & 0xFFFF) << 32) |
+                           (uint64_t(Register(g::XE_GPU_REG_RB_DEPTHCONTROL) & 0x7) << 48) |
+                           (uint64_t(Register(g::XE_GPU_REG_RB_MODECONTROL) & 0x7) << 51) | (uint64_t(clase) << 56);
+    DrawSumEntry& e = draw_sum_[{chave, modos}];
+    ++e.count;
+    e.sum_n += init >> 16;
+    ++draw_sum_total_;
+  }
+  void DrawSumLog() {
+    struct Linha { std::pair<uint64_t, uint64_t> chave; DrawSumEntry e; };
+    std::vector<Linha> v;
+    v.reserve(draw_sum_.size());
+    for (const auto& kv : draw_sum_) v.push_back({kv.first, kv.second});
+    std::sort(v.begin(), v.end(), [](const Linha& a, const Linha& b) {
+      return a.e.count != b.e.count ? a.e.count > b.e.count : a.chave < b.chave;
+    });
+    REXLOG_INFO("[draws sum] {} draws, {} distinct groups (vs, ps, prim, c0, z, blend, write mask, depth/stencil "
+                "enables, mode); top {} by count", draw_sum_total_, v.size(), std::min<size_t>(v.size(), 80));
+    for (size_t i = 0; i < v.size() && i < 80; ++i) {
+      const uint64_t k = v[i].chave.first, m = v[i].chave.second;
+      REXLOG_INFO("[draws sum] {}x vs{} ps{} prim {} c0 {:03X}/z {:03X} n {} | {} blend {:08X} mask {:04X} depthctl "
+                  "{:X} mode {}",
+                  v[i].e.count, int(k & 0xFFFF) - 1, int((k >> 16) & 0xFFFF) - 1, int((k >> 32) & 0x3F),
+                  int((k >> 38) & 0xFFF), int((k >> 50) & 0xFFF), v[i].e.sum_n,
+                  kNombresClase[std::min<uint32_t>(uint32_t(m >> 56), kClases - 1)], uint32_t(m), uint32_t(m >> 32) & 0xFFFF,
+                  uint32_t(m >> 48) & 0x7, uint32_t(m >> 51) & 0x7);
+    }
+    // Per pass (c0/z target pair): draws by class.
+    std::map<uint32_t, std::array<uint32_t, kClases + 1>> passes;  // (c0, z) -> per class, [kClases] = all
+    std::array<uint32_t, kClases> total{};
+    for (const auto& kv : draw_sum_) {
+      const uint32_t clase = std::min<uint32_t>(uint32_t(kv.first.second >> 56), kClases - 1);
+      auto& p = passes[uint32_t((kv.first.first >> 38) & 0xFFFFFF)];
+      p[clase] += kv.second.count;
+      p[kClases] += kv.second.count;
+      total[clase] += kv.second.count;
+    }
+    const auto por_clase = [](const auto& a) {
+      std::string s;
+      for (uint32_t c = 0; c < kClases; ++c) {
+        if (a[c]) s += fmt::format(" {} {},", kNombresClase[c], a[c]);
+      }
+      if (!s.empty()) s.pop_back();
+      return s;
+    };
+    REXLOG_INFO("[draws sum] by class (target 0 blend):{}", por_clase(total));
+    std::vector<std::pair<uint32_t, std::array<uint32_t, kClases + 1>>> p(passes.begin(), passes.end());
+    std::sort(p.begin(), p.end(), [](const auto& a, const auto& b) {
+      return a.second[kClases] != b.second[kClases] ? a.second[kClases] > b.second[kClases] : a.first < b.first;
+    });
+    REXLOG_INFO("[draws sum] draws per pass (c0/z target pair): {} pairs", p.size());
+    for (const auto& e : p) {
+      REXLOG_INFO("[draws sum] pass c0 {:03X}/z {:03X}: {} draws:{}", e.first & 0xFFF, e.first >> 12, e.second[kClases],
+                  por_clase(e.second));
+    }
+    draw_sum_.clear();
+    draw_sum_on_ = false;
+  }
   // One line per draw of a traced light frame: what it draws with and what became of it.
   void DrawTraceLine(bool drawn, const char* why = nullptr) {
     namespace g = rex::graphics;
@@ -2624,17 +3490,26 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
       probing_ = false;  // its draws' counts come back in ProbePoll
       REXLOG_INFO("[probe] end of the probed frame: {} base-pass draws", probes_.size());
     }
+    // XMOW 1019: the probe starts two Swaps after the traced frame ends. The frame right after the trace is the one
+    // the L3 + R3 dump writes to the SD (PedirVolcado); probed there, every base-pass draw went only into the 8x8 probe
+    // square and the dumps of tests 22-24 showed the scene depth empty except that square (700,650)-(708,658).
+    if (probe_delay_ && --probe_delay_ == 0) {
+      probing_ = true;
+      probes_.clear();
+      probe_started_ = now;
+      REXLOG_INFO("[probe] probed frame starts (square {},{}), after the dumped one", probe_x_, probe_y_);
+    }
     if (draw_tracing_) {
       draw_tracing_ = false;
       REXLOG_INFO("[draws] end of the traced frame");
+      if (draw_sum_on_) DrawSumLog();
       // The next frame: which base-pass draw paints the probe square (gow2_sonda).
       unsigned px = 0, py = 0;
       if (destinos_ && std::sscanf(REXCVAR_GET(gow2_sonda).c_str(), "%u,%u", &px, &py) == 2) {
-        probing_ = true;
+        // XMOW 1019: not this next frame (the dumped one): two Swaps later (probe_delay_ above).
         probe_x_ = px;
         probe_y_ = py;
-        probes_.clear();
-        probe_started_ = now;
+        probe_delay_ = 2;
       }
     } else if (telemetry_ && draw_traces_ < 8 && frame_.draws >= 10 && frame_.draws <= 400 && now >= next_draw_trace_) {
       draw_tracing_ = true;
@@ -2799,6 +3674,15 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     // A query issued again: whatever was still waited for at that structure is not written over it any more.
     std::erase_if(pending_queries_, [&](const PendingQuery& q) { return (q.address & ~0x3Fu) == query; });
     const bool real = REXCVAR_GET(gow2_oclusion_real) && destinos_;
+    // xmow_pular_caixas_consulta: a query is open between its begin and its end (Draw drops the boxes drawn in
+    // between). Real occlusion needs them drawn: they are what the GPU counts.
+    query_aberta_ = !end && !real;
+    // xmow_oclusao_conservadora: answered here, at once, from the box's history (OclusionConservadora).
+    if (!real && destinos_ && REXCVAR_GET(xmow_oclusao_conservadora)) {
+      OclusionConservadora(query, end, counts);
+      return;
+    }
+    if (oc_abierta_) OcCerrarSuelta();  // the mode was switched off inside a query
     if (real && !end) {
       std::memset(counts, 0, sizeof(*counts));
       destinos_->EmpezarOclusion(query);
@@ -2895,6 +3779,261 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     pending_queries_.erase(pending_queries_.begin(), pending_queries_.begin() + done);
   }
 
+  // --- xmow_oclusao_conservadora (0.1.21) -----------------------------------------------------------------------
+  // UE3 recycles its query objects from a pool, so the structure address says nothing about which primitive a query
+  // is for. The key is the box itself: a hash of the vertices of the first query box drawn between the begin and the
+  // end (UE3's FOcclusionQueryBatcher writes each batch's bounding boxes as world-space corners in one draw, so a
+  // static primitive, or an unchanged batch, gives the same bytes every frame; a moving one gets a new key and stays
+  // visible). The game is answered at the end ZPD, at once, from the history; the GPU count of a box that was drawn
+  // comes back later (OclusionConservadoraPoll) and only updates the history.
+
+  // Begin and end ZPD of a query with the mode on (OcclusionQuery). The begin structure is zeroed as in the fake path;
+  // the end one gets 1000 samples (visible) or 0 (hidden) and loses Direct3D's mark.
+  void OclusionConservadora(uint32_t query, bool end, xenos::xe_gpu_depth_sample_counts* counts) {
+    std::memset(counts, 0, sizeof(*counts));
+    ++oc_.zpd_fotograma;
+    if (!end) {
+      OcCerrarSuelta();  // a query left open (its end never came): its count is read and dropped
+      oc_abierta_ = true;
+      oc_query_ = query;
+      oc_decidida_ = oc_medir_ = oc_empezada_ = oc_pinta_ = false;
+      oc_clave_ = 0;
+      return;
+    }
+    uint32_t n = uint32_t(kFakeSampleCount);
+    if (oc_abierta_ && oc_query_ == query) {
+      const bool con_clave = oc_decidida_ && oc_clave_ != 0;
+      const bool elegible = con_clave && !oc_pinta_;
+      if (oc_empezada_) {
+        if (const uint64_t ticket = destinos_->TerminarOclusionAsincrona(query)) {
+          if (elegible) {
+            oc_pendientes_.push_back({ticket, oc_clave_, swaps_});
+          } else {
+            oc_tickets_sueltos_.push_back(ticket);  // read and dropped, so the renderer does not keep it
+          }
+        }
+      }
+      if (!oc_decidida_) {
+        ++oc_.sin_caja;
+      } else if (!con_clave) {
+        ++oc_.sin_clave;
+      } else if (oc_pinta_) {
+        ++oc_.pinta;
+      } else if (const auto it = oc_historial_.find(oc_clave_); it != oc_historial_.end()) {
+        HistorialOclusion& h = it->second;
+        h.visto = swaps_;
+        // Hidden: two valid zero counts in consecutive frames, the last one recent (a box seen again after a while,
+        // a camera cut, a primitive back in the frustum: its old zeros say nothing about this view).
+        if (h.ceros >= 2 && swaps_ - h.cero <= kOcEdadCero) n = 0;
+      }
+    }
+    oc_abierta_ = false;
+    ++(n ? oc_.visibles : oc_.ocultas);
+    counts->ZPass_A = n;
+    counts->Total_A = n;
+  }
+
+  // The open conservative query ends without an answer: its GPU count, if one was started, is closed in the renderer
+  // (no open count left behind there) and dropped.
+  void OcCerrarSuelta() {
+    if (oc_abierta_ && oc_empezada_) {
+      if (const uint64_t ticket = destinos_->TerminarOclusionAsincrona(oc_query_)) oc_tickets_sueltos_.push_back(ticket);
+    }
+    oc_abierta_ = oc_empezada_ = false;
+  }
+
+  // A query box inside a conservative query (Draw): false = not drawn. The first box of the query decides for all of
+  // its boxes whether they are drawn and counted this frame (OcMedir), and starts the GPU count.
+  bool CajaConservadora() {
+    if (!oc_decidida_) {
+      oc_decidida_ = true;
+      uint64_t clave = 0;
+      if (HuellaCaja(clave)) {
+        oc_clave_ = clave;
+        oc_medir_ = OcMedir(clave);
+      }
+      if (oc_medir_) {
+        destinos_->EmpezarOclusion(oc_query_);
+        oc_empezada_ = true;
+      }
+    }
+    if (oc_medir_ || !REXCVAR_GET(xmow_pular_caixas_consulta)) {
+      ++oc_.dibujadas;
+      return true;
+    }
+    ++oc_.saltadas;
+    return false;
+  }
+
+  // Whether the box with this key is drawn and counted this frame. A key seen for the first time is not (a moving
+  // object's box changes every frame: never counted, always visible); one never counted yet, or last counted 0 (or with
+  // the depth not valid), is counted every frame, to hide it soon or to show it again at once; a visible one once every
+  // xmow_oclusao_reteste_quadros frames, spread by its hash.
+  bool OcMedir(uint64_t clave) {
+    const bool pular = REXCVAR_GET(xmow_pular_caixas_consulta);
+    auto [it, nueva] = oc_historial_.try_emplace(clave);
+    HistorialOclusion& h = it->second;
+    if (nueva) {
+      h.visto = swaps_;
+      return !pular;
+    }
+    if (!pular || !h.medida || h.sospecha) return true;
+    const uint64_t periodo = uint64_t(std::max(REXCVAR_GET(xmow_oclusao_reteste_quadros), 1));
+    const uint64_t fase = (clave ^ (clave >> 29) ^ (clave >> 47)) % periodo;
+    return fase == swaps_ % periodo;
+  }
+
+  // The key of the box draw about to be sent: XXH3 of its vertices (the stream of the VS position element, the vertex
+  // range the indices use) with the vertex shader, primitive type and index count as the seed. false = no key (the
+  // query is answered visible and its boxes are skipped, as in 0.1.20).
+  bool HuellaCaja(uint64_t& clave) const {
+    namespace g = rex::graphics;
+    if (!vs_ || vs_->elementos.empty()) return false;
+    const uint32_t init = Register(g::XE_GPU_REG_VGT_DRAW_INITIATOR);
+    const uint32_t count = init >> 16;
+    if (!count || count > kOcIndicesMax) return false;
+    const rex::x360::ElementoVertice* posicion = &vs_->elementos.front();
+    for (const rex::x360::ElementoVertice& el : vs_->elementos) {
+      if (el.uso == 0 && el.indice_uso == 0) {
+        posicion = &el;
+        break;
+      }
+    }
+    const size_t i = size_t(posicion->instruccion) * 3;
+    if (i + 2 >= vs_microcode_.size()) return false;
+    const uint32_t w0 = vs_microcode_[i], w2 = vs_microcode_[i + 2];
+    const uint32_t slot = ((w0 >> 20) & 0x1F) * 3 + ((w0 >> 25) & 0x3);  // as ExpandRectList
+    const uint32_t stride = w2 & 0xFF;                                    // words
+    const uint32_t f0 = registers_[0x4800 + slot * 2], f1 = registers_[0x4800 + slot * 2 + 1];
+    if ((f0 & 0x3) != 3 || !stride) return false;
+    const uint32_t available = (f1 >> 2) & 0xFFFFFF;  // words
+    const uint32_t offset = Register(g::XE_GPU_REG_VGT_INDX_OFFSET) & 0xFFFFFF;
+    uint32_t vmin = UINT32_MAX, vmax = 0;
+    const uint32_t source = (init >> 6) & 0x3;
+    if (source == 2) {  // auto index
+      vmin = offset;
+      vmax = offset + count - 1;
+    } else if (source == 0) {  // DMA: the indices' range, read as the renderer's IndicesDe32 does (whole swapped words)
+      const bool idx32 = (init >> 11) & 0x1;
+      const uint32_t dma_size = Register(g::XE_GPU_REG_VGT_DMA_SIZE);
+      const auto orden = static_cast<xenos::Endian>(dma_size >> 30);
+      const uint32_t bytes = idx32 ? 4 : 2;
+      const uint32_t dma_base = Register(g::XE_GPU_REG_VGT_DMA_BASE) & ~(bytes - 1) & 0x1FFFFFFF;
+      if (count > (dma_size & 0xFFFFFF) || uint64_t(dma_base) + uint64_t(count) * bytes + 4 > kOcMemoriaFisica) {
+        return false;
+      }
+      const uint8_t* datos = memory_->TranslatePhysical(dma_base);
+      for (uint32_t k = 0; k < count; ++k) {
+        uint32_t v;
+        if (idx32) {
+          uint32_t crudo;
+          std::memcpy(&crudo, datos + size_t(k) * 4, 4);
+          v = xenos::GpuSwap(crudo, orden) & 0xFFFFFF;
+        } else {
+          const uint8_t* indice = datos + size_t(k) * 2;
+          const uint8_t* par = reinterpret_cast<const uint8_t*>(uintptr_t(indice) & ~uintptr_t(3));
+          const bool alta = (uintptr_t(indice) & 2) != 0;
+          uint32_t palabra = 0;
+          std::memcpy(&palabra, par, (k + 1 == count && !alta && (uintptr_t(par) & 0xFFF) > 0xFFC) ? 2 : 4);
+          palabra = xenos::GpuSwap(palabra, orden);
+          v = alta ? (palabra >> 16) : (palabra & 0xFFFF);
+          if (v == 0xFFFF) continue;  // a restart index, if the game used one
+        }
+        v += offset;
+        vmin = std::min(vmin, v);
+        vmax = std::max(vmax, v);
+      }
+      if (vmin > vmax) return false;
+    } else {
+      return false;
+    }
+    if (vmax - vmin >= kOcVerticesMax || uint64_t(vmax + 1) * stride > available ||
+        uint64_t(f0 & 0x1FFFFFFC) + uint64_t(vmax + 1) * stride * 4 > kOcMemoriaFisica) {
+      return false;
+    }
+    const uint32_t direccion = (f0 & 0x1FFFFFFC) + vmin * stride * 4;
+    const uint8_t* vertices = memory_->TranslatePhysical(direccion);
+    const uint64_t semilla = (uint64_t(vs_->numero) << 40) ^ (uint64_t(init & 0x3F) << 32) ^ count;
+    const uint64_t h = XXH3_64bits_withSeed(vertices, size_t(vmax - vmin + 1) * stride * 4, semilla);
+    clave = h ? h : 1;
+    return true;
+  }
+
+  // The GPU counts that came back, in order, into the history; never waits. Called with the other polls (RingLoop).
+  void OclusionConservadoraPoll() {
+    if (!destinos_) return;
+    for (const uint64_t ticket : oc_tickets_sueltos_) {
+      uint64_t n = 0;
+      bool z = false;
+      if (!destinos_->ResultadoOclusionZ(ticket, n, z)) {
+        oc_sueltos_espera_.push_back(ticket);
+      }
+    }
+    oc_tickets_sueltos_.clear();
+    oc_tickets_sueltos_.swap(oc_sueltos_espera_);
+    if (oc_tickets_sueltos_.size() > 4096) oc_tickets_sueltos_.clear();  // the renderer forgets them on its own
+    while (!oc_pendientes_.empty()) {
+      const PendienteOclusion& p = oc_pendientes_.front();
+      uint64_t n = 0;
+      bool z_valida = false;
+      if (!destinos_->ResultadoOclusionZ(p.ticket, n, z_valida)) {
+        if (swaps_ - p.fotograma <= kOcEsperaMaxFotogramas) break;  // in order: the later ones are not back either
+        ++oc_.perdidas;  // given up (the renderer forgets old tickets): nothing learnt
+        oc_pendientes_.pop_front();
+        continue;
+      }
+      ++oc_.cuentas;
+      if (swaps_ - p.fotograma >= 2) ++oc_.atrasadas;
+      if (!z_valida) ++oc_.z_invalidas;
+      if (const auto it = oc_historial_.find(p.clave); it != oc_historial_.end() && p.fotograma >= it->second.medido) {
+        HistorialOclusion& h = it->second;
+        const bool cero_seguido = h.ceros > 0 && p.fotograma - h.cero <= 2;  // the frame after (or the same frame)
+        h.medida = true;
+        h.medido = p.fotograma;
+        if (!z_valida) {
+          h.ceros = 0;          // the chain of zeros is broken: never hidden on this count
+          h.sospecha = n == 0;  // counted again next frame if it said 0
+        } else if (n > 0) {
+          h.ceros = 0;  // visible again at once
+          h.sospecha = false;
+        } else {
+          if (!cero_seguido) {
+            h.ceros = 1;
+          } else if (p.fotograma > h.cero) {
+            h.ceros = 2;  // two frames in a row (two counts in one frame, the two tiles, are one)
+          }
+          h.cero = p.fotograma;
+          h.sospecha = true;
+        }
+      }
+      oc_pendientes_.pop_front();
+    }
+  }
+
+  // At each Swap: the history is forgotten after a long frame (a load, a level change), after a run of frames without
+  // queries (menus, movies) and when the mode is switched on; old keys go when it grows past kOcHistorialMax.
+  void OclusionConservadoraSwap() {
+    OclusionConservadoraPoll();
+    const auto ahora = Clock::now();
+    const bool activa = REXCVAR_GET(xmow_oclusao_conservadora);
+    const bool hueco = oc_ultimo_swap_ != Clock::time_point{} && ahora - oc_ultimo_swap_ > std::chrono::seconds(1);
+    oc_ultimo_swap_ = ahora;
+    oc_sin_consultas_ = oc_.zpd_fotograma ? 0 : oc_sin_consultas_ + 1;
+    oc_.zpd_fotograma = 0;
+    if (destinos_) OcCerrarSuelta();
+    const bool encendida = activa && !oc_activa_previa_;
+    oc_activa_previa_ = activa;
+    if (!oc_historial_.empty() && (hueco || encendida || !activa || oc_sin_consultas_ >= 30)) {
+      oc_historial_.clear();
+      ++oc_.limpiezas;
+    }
+    if (oc_historial_.size() > kOcHistorialMax) {
+      std::erase_if(oc_historial_, [&](const auto& e) { return e.second.visto + 8 < swaps_; });
+      if (oc_historial_.size() > kOcHistorialMax) oc_historial_.clear();
+      ++oc_.podas;
+    }
+  }
+
   rex::ui::WindowedAppContext* app_context_ = nullptr;
   std::unique_ptr<rex::ui::GraphicsProvider> provider_;
   std::unique_ptr<rex::ui::Presenter> presenter_;
@@ -2921,6 +4060,13 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   std::mutex ring_mutex_;
   std::condition_variable ring_cv_;
   std::atomic<bool> ring_dormido_{false};  // the ring thread is (about to be) waiting on ring_cv_
+  // 0.1.33: CP_RB_WPTR writes, and those that woke the ring (one writer each; read and reset by the report).
+  // Statistics only: a load and store each (one writer), taken with exchange by the report. A report that runs between
+  // a writer's load and store sees that interval's count again in the next report (never a decision input).
+  std::atomic<uint64_t> wptr_escritas_{0}, wptr_despertares_{0};
+  // 0.1.33d: ns the waking kicks spent taking ring_mutex_ / in notify_one, and the longest lock wait (same rules).
+  std::atomic<uint64_t> kick_ns_cerrojo_{0}, kick_ns_aviso_{0}, kick_ns_max_{0};
+  uint32_t reinicio_visto_ = 0;  // 0.1.33d: rex::x360::g_xmow_reinicio_informes at the last report
   static constexpr uint32_t kRptrPaso = 256;  // words between the read pointer writebacks inside a batch
   const Reader* lector_anillo_ = nullptr;     // RingLoop's reader during a batch (xmow_anillo_rptr_rapido), else null
   rex::system::object_ref<rex::system::XHostThread> ring_thread_;
@@ -2944,6 +4090,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   bool diag_activo_ = true;      // xmow_diag_solo_activo: per-draw diagnostics this frame (ActualizarDiag)
   std::vector<uint64_t> omitir_ps_bits_;  // xmow_omitir_ps as a bitset by shader number (EnListaOmitir)
   uint64_t generacion_vs_ = 0, generacion_constantes_vs_ = 0, generacion_constantes_ps_ = 0;
+  uint64_t sucias_vs_[4] = {}, sucias_ps_[4] = {};  // xmow 1034 (MarcarConstante)
   uint64_t generacion_fetch_ = 0, generacion_encuadre_ = 0;
   uint64_t geometria_ = 0, enviados_ = 0, sin_vs_ = 0, sin_ps_ = 0;
   std::unordered_map<uint64_t, uint64_t> unknown_vs_skips_;          // microcode hash -> draws skipped
@@ -2997,6 +4144,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
     uint64_t ticket, samples;
   };
   bool probing_ = false;
+  uint32_t probe_delay_ = 0;  // XMOW 1019: Swaps left before the probed frame starts (0 = none pending)
   uint32_t probe_x_ = 0, probe_y_ = 0;
   std::vector<Probe> probes_;
   std::chrono::steady_clock::time_point probe_started_;
@@ -3005,6 +4153,7 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   uint32_t tree_capture_after_ = 0;
   uint64_t skipped_broken_vs_ = 0;
   uint64_t prepass_skipped_ = 0;
+  uint64_t reported_prepass_skipped_ = 0;  // 0.1.31 ([xmow census])
   uint64_t skipped_by_mode_ = 0;
   // xmow_captura_ab: the group left out until the next capture (0 = none, 1 translucent, 2 modulated shadows, 3 the
   // xmow_ab_ps list, 4 additive, 5 alpha-blended translucents "ta", 6 other translucents "to"), the frames until it, whose turn is next, and the list read once.
@@ -3017,6 +4166,77 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   uint32_t omitir_ps_version_ = 0;  // EnListaOmitir: change count of xmow_omitir_ps the list was read at
   std::vector<uint32_t> omitir_ps_;
   uint64_t omitidos_ps_ = 0;
+  uint64_t omitidos_niebla_ = 0;  // height fog draws left out by xmow_niebla_altura (NieblaAlturaOmitida)
+  bool niebla_frontal_ = false;   // NieblaAlturaOmitida: the last fog draw was the frontend's (AUTO)
+  // xmow_pular_caixas_consulta
+  bool query_aberta_ = false;             // an occlusion query is between its begin and its end (OcclusionQuery)
+  uint64_t caixas_omitidas_ = 0;          // query box draws dropped, in total
+  uint64_t reported_caixas_ = 0;          // ... at the last 10 s report
+  uint64_t frame_caixas_ = 0;             // ... in the frame being counted (for [xmow hitch])
+  // xmow_oclusao_conservadora (OclusionConservadora and the functions after it)
+  static constexpr uint32_t kOcIndicesMax = 8192;            // index count of a box draw that is still keyed
+  static constexpr uint32_t kOcVerticesMax = 4096;           // vertex range of a box draw that is still keyed
+  static constexpr uint64_t kOcMemoriaFisica = 0x20000000;   // 512 MB of guest physical memory
+  static constexpr size_t kOcHistorialMax = 16384;           // keys kept (pruned at the Swap)
+  static constexpr uint64_t kOcEdadCero = 4;                 // frames a zero count is still recent enough to hide
+  static constexpr uint64_t kOcEsperaMaxFotogramas = 8;      // frames a GPU count is waited for before giving up
+  struct HistorialOclusion {
+    uint64_t visto = 0;     // swap of the last query with this key
+    uint64_t medido = 0;    // swap of the query of the last count applied
+    uint64_t cero = 0;      // swap of the query of the last valid count of 0
+    uint8_t ceros = 0;      // valid counts of 0 in consecutive frames (2 = hidden while recent)
+    bool medida = false;    // counted at least once
+    bool sospecha = false;  // the last count said 0 (valid or not): counted every frame
+  };
+  struct PendienteOclusion {
+    uint64_t ticket, clave, fotograma;
+  };
+  std::unordered_map<uint64_t, HistorialOclusion> oc_historial_;
+  std::deque<PendienteOclusion> oc_pendientes_;                         // counts asked for, oldest first
+  std::vector<uint64_t> oc_tickets_sueltos_, oc_sueltos_espera_;        // counts read only to be dropped
+  bool oc_abierta_ = false;   // a conservative query is between its begin and its end
+  bool oc_decidida_ = false;  // its first box was seen (key and decision made)
+  bool oc_medir_ = false;     // its boxes are drawn and counted this time
+  bool oc_empezada_ = false;  // EmpezarOclusion was called for it
+  bool oc_pinta_ = false;     // a draw that is not a query box went into it: answered visible, not learnt from
+  uint32_t oc_query_ = 0;
+  uint64_t oc_clave_ = 0;
+  bool oc_activa_previa_ = false;
+  uint32_t oc_sin_consultas_ = 0;
+  Clock::time_point oc_ultimo_swap_{};
+  struct ContadoresOclusion {
+    uint64_t ocultas = 0, visibles = 0, sin_caja = 0, sin_clave = 0, pinta = 0;
+    uint64_t dibujadas = 0, saltadas = 0, cuentas = 0, atrasadas = 0, z_invalidas = 0, perdidas = 0;
+    uint64_t limpiezas = 0, podas = 0;
+    uint64_t zpd_fotograma = 0;  // ZPDs this frame (not reported)
+  } oc_;
+  // xmow 1031: the ring thread's time by activity (accumulated ns; HitchPorSwap takes the per-frame deltas), and the
+  // renderer's own accumulators at the last Swap (10 s report, dump end, DKSH reads on the ring, fence waits, recording).
+  struct TiempoAnillo {
+    uint64_t ocioso = 0, informe = 0, sondeos = 0, paquetes = 0, dibujar = 0, copiar = 0, presentar = 0, subidas = 0;
+  };
+  TiempoAnillo anillo_{}, anillo_previo_{};
+  std::array<uint64_t, 5> hitch_r_previo_{};
+  static uint64_t NsAnillo() {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count());
+  }
+  bool CopiarMedido(const rex::x360::RegistrosCopia& c) {
+    const uint64_t t = NsAnillo();
+    const bool ok = destinos_->Copiar(c);
+    anillo_.copiar += NsAnillo() - t;
+    return ok;
+  }
+  // xmow_log_hitch_ms: [xmow hitch] lines wait here for the 10 s report (the logger writes to the SD synchronously)
+  Clock::time_point hitch_ultimo_swap_{};
+  bool hitch_ressincronizar_ = false;  // 0.1.34: PLAY MODE skipped frames, the deltas are stale
+  uint64_t hitch_subidas_prev_ = 0, hitch_espera_anillo_prev_ = 0, hitch_espera_d3d_prev_us_ = 0;
+  std::vector<std::string> hitch_linhas_;
+  uint32_t hitch_suprimidas_ = 0;
+  // L3 + R3: the swap at which the presented frame is saved, and the one-per-dump log of PS 6971's inputs
+  uint64_t captura_final_en_ = 0;
+  bool composicao_final_logada_ = false;
   std::unordered_map<uint32_t, uint32_t> ab_detalles_;
   std::unordered_map<uint32_t, uint32_t> tela_detalles_;
   uint64_t clears_logged_1x_ = 0;
@@ -3024,6 +4244,24 @@ class RingGraphicsSystem final : public rex::system::IGraphicsSystem {
   std::unordered_set<uint64_t> unknown_vs_logged_;
   uint32_t glow_draws_logged_ = 0;
   bool draw_tracing_ = false;
+  struct DrawSumEntry { uint32_t count = 0; uint64_t sum_n = 0; };
+  bool draw_sum_on_ = false;  // 0.1.22: the L3 + R3 frame is being summed
+  uint32_t draw_sum_total_ = 0;
+  std::map<std::pair<uint64_t, uint64_t>, DrawSumEntry> draw_sum_;  // 0.1.26: (groups, blend/write modes)
+  // 0.1.26: draws sent to the renderer by ClaseDelDibujo since the last 10 s report, and the inert ones it drew
+  std::array<uint64_t, kClases> censo_{};
+  uint64_t censo_inertes_dibujados_ = 0;
+  uint64_t inertes_omitidos_ = 0;    // 0.1.29 xmow_pular_inertes, since the last 10 s report
+  uint64_t tijera_1px_dibujos_ = 0;  // 0.1.29 xmow_diag_tijera_1px, since the last 10 s report
+  uint64_t vacios_dibujos_ = 0;      // 0.1.30 xmow_diag_custo_dibujo = 2, since the last 10 s report
+  int32_t volcado_pilhas_mb_ = -1;  // xmow_amostragem_volcado_mb handed to switch_perf.cpp (-1 = not yet)
+  uint64_t hitch_gpu_prev_ns_ = 0;  // [xmow hitch]: GPU busy of the works read back, at the last Swap
+  // 0.1.27: draws skipped while their shader's SPIR-V was being read (Draw), and [xmow hitch]'s previous values of
+  // them, of the library's SPIR-V reads on the calling threads and on its reader thread (ns).
+  uint64_t spirv_no_lista_ = 0;
+  std::array<uint64_t, 3> hitch_spirv_prev_{};
+  std::string mapa_actual_;              // MapaPorSwap
+  Clock::time_point mapa_guardado_{};
   uint32_t draw_traces_ = 0, draw_trace_n_ = 0, draw_trace_cap_ = 400;
   uint32_t next_capture_ = UINT32_MAX;  // SaveCapture
   Clock::time_point next_draw_trace_{};

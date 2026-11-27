@@ -217,17 +217,24 @@ def main(pattern: str) -> int:
         orig = s
         if TRAP in s:
             n = s.count(TRAP)
-            for m in re.finditer(re.escape(TRAP), s):
+            # lote C: com ctr_as_local (gerador do fork do LoS1-nx) o mtctr vira `ctr.u64 = ...` (local da funcao) e
+            # ctx.ctr fica velho; o despacho usa o registrador que o mtctr mais proximo antes do switch escreveu.
+            def repl(m, s=s):
+                nonlocal unsafe
                 ctx_before = s[max(0, m.start() - 8000):m.start()]
                 switch_pos = ctx_before.rfind("switch (")
-                mtctr_pos = ctx_before.rfind("ctx.ctr.u64 =")
+                ctx_pos = ctx_before.rfind("ctx.ctr.u64 =")
+                loc_pos = ctx_before.rfind("\tctr.u64 =")
+                mtctr_pos = max(ctx_pos, loc_pos)
                 if mtctr_pos == -1 or switch_pos == -1 or mtctr_pos > switch_pos:
                     unsafe += 1
-            s = re.sub(
-                r"(\t+)__builtin_trap\(\); // Switch case out of range",
-                lambda m: m.group(1) + REPL,
-                s,
-            )
+                # O registrador vem da funcao inteira, nao da janela de 8000 caracteres: num switch grande (sub_828F8198,
+                # 1.500 linhas) o mtctr fica fora dela. Funcao com o local `ctr` declarado -> ctr.u32.
+                func_start = s.rfind("DEFINE_REX_FUNC(", 0, m.start())
+                local_ctr = func_start != -1 and "\n\tPPCRegister ctr{};" in s[func_start:m.start()]
+                reg = "ctr.u32" if local_ctr or loc_pos > ctx_pos else "ctx.ctr.u32"
+                return m.group(1) + REPL.replace("ctx.ctr.u32", reg)
+            s = re.sub(r"(\t+)__builtin_trap\(\); // Switch case out of range", repl, s)
             total += n
         if 'REX_FATAL("Unresolved ' in s:
             s, nf, hv = patch_fatal_branches(s, fn)

@@ -10,14 +10,22 @@
 #include "ds_shader_library.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <exception>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <rex/cvar.h>
+#include <rex/platform.h>
+#include <rex/thread.h>
+#include <rex/x360/destinos.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/memory/utils.h>
@@ -39,6 +47,19 @@ REXCVAR_DEFINE_BOOL(gow2_shaders_por_demanda, true, "XMOW",
                     "La biblioteca de shaders se carga como indice (solo los contenedores) y el SPIR-V de cada shader "
                     "se lee de la tarjeta la primera vez que se usa: con todos los shaders del juego (~470 MB) no cabe "
                     "en memoria. false = entera en memoria");
+
+REXCVAR_DEFINE_BOOL(xmow_spirv_lectura_fondo, true, "XMOW",
+                    "0.1.27: the SPIR-V of a shader the ring meets for the first time is read from the card on a thread "
+                    "of its own, not on the ring thread (the helicopter's first-use hitches); its draws are skipped "
+                    "until it is read, as with a DKSH being read. false = read on the ring as in 0.1.26");
+REXCVAR_DEFINE_BOOL(xmow_precarga_mapa, true, "XMOW",
+                    "0.1.27: the shaders (SPIR-V and DKSH) read while a map is current are saved in xmow_precarga/ next "
+                    "to the NRO and read in the background when that map is loaded again (during its loading screen)");
+REXCVAR_DECLARE(int32_t, xmow_precarga_max);  // sdk-g2 src/x360/deko/destinos.cpp (xmow 1033)
+
+#if REX_PLATFORM_SWITCH
+extern "C" void RexSwitchSetCurrentThreadPriority(int priority);  // sdk-g2 src/core/threading_switch.h
+#endif
 
 namespace gow2::shaders {
 namespace {
@@ -272,9 +293,47 @@ struct Biblioteca::Datos {
   std::vector<EntradaShader> entradas;
   // CargarIndice: each entry's SPIR-V once read (Completar), and whether it was.
   std::vector<std::vector<uint32_t>> spirv_leido;
-  std::vector<uint8_t> completa;
+  // 0.1.27: 0 not read, 1 queued to the reader thread, 2 read (or its read failed: spirv stays empty). Written with
+  // release once spirv and what comes from it are in place; Lista reads it with acquire.
+  std::unique_ptr<std::atomic<uint8_t>[]> completa;
   bool por_demanda = false;
   uint64_t leidas = 0, leidas_ns = 0, fallidas = 0;
+  // 0.1.27: the reader thread and the per-map preload.
+  std::mutex lectura;  // one read at a time (LeerEntrada), and the members below
+  std::mutex cola_candado;
+  std::condition_variable cola_hay;
+  std::deque<std::function<void()>> cola;
+  std::unique_ptr<rex::thread::Thread> lector;
+  std::unordered_map<uint64_t, uint32_t> por_huella_contenedor;  // huella_contenedor -> entry index
+  std::unordered_set<uint64_t> del_mapa;  // huella_contenedor of the shaders read (or preloaded) in the current map
+  std::string mapa;
+  bool mapa_sucio = false;  // del_mapa grew since it was last saved
+  uint64_t generacion = 0;  // one more per map change (written on the ring, read under `lectura`)
+  std::atomic<uint64_t> ns_en_el_acto{0}, ns_fondo{0}, fondo{0}, precargadas{0}, no_listas{0};
+
+  // The reader thread, started with the first job (cola_candado held). false if it could not be created.
+  bool ArrancarLector() {
+    if (lector) return true;
+    Datos* dp = this;
+    lector = rex::thread::Thread::Create({}, [dp] {
+#if REX_PLATFORM_SWITCH
+      // The time-sliced band, as the SD writer (destinos.cpp EncolarEscrituraSd): it waits for the card most of the
+      // time and must not keep a guest thread from its core.
+      RexSwitchSetCurrentThreadPriority(0x3B);
+#endif
+      for (;;) {
+        std::function<void()> tarea;
+        {
+          std::unique_lock<std::mutex> l(dp->cola_candado);
+          dp->cola_hay.wait(l, [dp] { return !dp->cola.empty(); });
+          tarea = std::move(dp->cola.front());
+          dp->cola.pop_front();
+        }
+        tarea();
+      }
+    });
+    return lector != nullptr;
+  }
   std::unordered_map<const void*, uint32_t> por_shader;
   std::map<std::pair<bool, uint32_t>, std::vector<uint32_t>> candidatos;  // (vertices, words) -> entries
   bool cargada = false;
@@ -296,7 +355,10 @@ struct Biblioteca::Datos {
 };
 
 Biblioteca::Biblioteca() : datos_(std::make_unique<Datos>()) {}
-Biblioteca::~Biblioteca() = default;
+Biblioteca::~Biblioteca() {
+  // 0.1.27: the reader thread lives as long as the process and waits on Datos: never destroyed under it.
+  if (datos_ && datos_->lector) (void)datos_.release();
+}
 
 bool Biblioteca::cargada() const { return datos_->cargada; }
 
@@ -357,11 +419,13 @@ bool Biblioteca::Cargar(const std::filesystem::path& archivo) {
     d.entradas.push_back(std::move(e));
   }
   d.spirv_leido.assign(d.entradas.size(), {});
-  d.completa.assign(d.entradas.size(), d.por_demanda ? 0 : 1);
+  d.completa = std::make_unique<std::atomic<uint8_t>[]>(d.entradas.size());
+  for (size_t i = 0; i < d.entradas.size(); ++i) d.completa[i].store(d.por_demanda ? 0 : 2, std::memory_order_relaxed);
   for (uint32_t i = 0; i < d.entradas.size(); ++i) {
     const EntradaShader& e = d.entradas[i];
     d.candidatos[{e.vertices, uint32_t(e.microcodigo.size())}].push_back(i);
     d.por_shader[e.juego] = i;
+    d.por_huella_contenedor.emplace(e.huella_contenedor, i);
   }
   d.cargada = !d.entradas.empty();
   const size_t vs = std::count_if(d.entradas.begin(), d.entradas.end(), [](const auto& e) { return e.vertices; });
@@ -374,14 +438,12 @@ bool Biblioteca::Cargar(const std::filesystem::path& archivo) {
   return d.cargada;
 }
 
-void Biblioteca::Completar(const EntradaShader* entrada) const {
+// The entry's SPIR-V from the card and what comes from it. One read at a time (Datos::lectura); the create hooks (game
+// threads), the ring (xmow_spirv_lectura_fondo off) and the reader thread all come here.
+void Biblioteca::LeerEntrada(size_t i, bool fondo, bool precarga) const {
   Datos& d = *datos_;
-  if (!entrada || !d.por_demanda) return;
-  const size_t i = size_t(entrada - d.entradas.data());
-  if (i >= d.entradas.size() || d.completa[i]) return;
-  static std::mutex mutex;  // Identificar holds Datos::mutex, PorContenedor does not
-  std::lock_guard<std::mutex> lock(mutex);
-  if (d.completa[i]) return;
+  std::lock_guard<std::mutex> lock(d.lectura);
+  if (d.completa[i].load(std::memory_order_acquire) == 2) return;
   const auto inicio = std::chrono::steady_clock::now();
   EntradaShader& e = d.entradas[i];
   d.spirv_leido[i] = d.biblioteca.LeerSpirv(e.numero);
@@ -391,14 +453,153 @@ void Biblioteca::Completar(const EntradaShader* entrada) const {
     e.spirv = d.spirv_leido[i];
     DatosDelSpirv(*static_cast<const ds::Shader*>(e.juego), e);
   }
-  d.leidas_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
-                                                                                inicio).count());
+  const uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
+                                                                                    inicio).count());
+  d.leidas_ns += ns;
+  (fondo ? d.ns_fondo : d.ns_en_el_acto).fetch_add(ns, std::memory_order_relaxed);
+  if (fondo) d.fondo.fetch_add(1, std::memory_order_relaxed);
+  if (precarga) d.precargadas.fetch_add(1, std::memory_order_relaxed);
   ++d.leidas;
   if ((d.leidas & (d.leidas - 1)) == 0 && d.leidas >= 64) {
-    REXLOG_INFO("[shaders] {} shaders read from the card so far ({:.2f} ms each on average)", d.leidas,
-                double(d.leidas_ns) / 1e6 / double(d.leidas));
+    REXLOG_INFO("[shaders] {} shaders read from the card so far ({:.2f} ms each on average; {} on the reader thread, "
+                "{} of them preloaded)", d.leidas, double(d.leidas_ns) / 1e6 / double(d.leidas),
+                d.fondo.load(std::memory_order_relaxed), d.precargadas.load(std::memory_order_relaxed));
   }
-  d.completa[i] = 1;
+  if (!d.mapa.empty() && d.del_mapa.size() < size_t(std::max(REXCVAR_GET(xmow_precarga_max), 0)) &&
+      d.del_mapa.insert(e.huella_contenedor).second) {
+    d.mapa_sucio = true;
+  }
+  d.completa[i].store(2, std::memory_order_release);
+}
+
+void Biblioteca::Encolar(size_t i, bool urgente) const {
+  Datos& d = *datos_;
+  // 1 = queued as a preload, 3 = queued for a draw: a draw's request goes ahead of the preloads even when its entry is
+  // already queued as one (LeerEntrada returns at once for the second job).
+  uint8_t estado = d.completa[i].load(std::memory_order_acquire);
+  for (;;) {
+    if (estado == 2 || estado == 3 || (estado == 1 && !urgente)) return;
+    if (d.completa[i].compare_exchange_weak(estado, urgente ? 3 : 1, std::memory_order_acq_rel)) break;
+  }
+  {
+    std::lock_guard<std::mutex> l(d.cola_candado);
+    auto tarea = [this, i, urgente] { LeerEntrada(i, true, !urgente); };
+    if (!d.ArrancarLector()) {
+      // No thread: read on the spot, as in 0.1.26.
+      d.completa[i].store(0, std::memory_order_release);
+      return;
+    }
+    if (urgente) {
+      d.cola.push_front(std::move(tarea));
+    } else {
+      d.cola.push_back(std::move(tarea));
+    }
+  }
+  d.cola_hay.notify_one();
+}
+
+void Biblioteca::Completar(const EntradaShader* entrada, bool del_anillo) const {
+  Datos& d = *datos_;
+  if (!entrada || !d.por_demanda) return;
+  const size_t i = size_t(entrada - d.entradas.data());
+  if (i >= d.entradas.size() || d.completa[i].load(std::memory_order_acquire) == 2) return;
+  if (del_anillo && REXCVAR_GET(xmow_spirv_lectura_fondo)) {
+    Encolar(i, true);
+    if (d.completa[i].load(std::memory_order_acquire) != 0) return;  // 0: no reader thread
+  }
+  LeerEntrada(i, false, false);
+}
+
+bool Biblioteca::Lista(const EntradaShader* entrada) const {
+  Datos& d = *datos_;
+  if (!entrada || !d.por_demanda) return true;
+  const size_t i = size_t(entrada - d.entradas.data());
+  if (i >= d.entradas.size() || d.completa[i].load(std::memory_order_acquire) == 2) return true;
+  d.no_listas.fetch_add(1, std::memory_order_relaxed);
+  return false;
+}
+
+namespace {
+constexpr uint32_t kMagiaPrecarga = 0x31435058;  // "XPC1": u32 magic, u32 count, count u64 container fingerprints
+}
+
+void Biblioteca::CambioDeMapa(const std::string& mapa, const std::filesystem::path& carpeta) {
+  Datos& d = *datos_;
+  if (!d.cargada || !d.por_demanda || !REXCVAR_GET(xmow_precarga_mapa) || mapa.empty()) return;
+  std::string anterior;
+  std::vector<uint64_t> guardar;
+  {
+    std::lock_guard<std::mutex> lock(d.lectura);
+    anterior = d.mapa;
+    if (d.mapa_sucio && !anterior.empty()) guardar.assign(d.del_mapa.begin(), d.del_mapa.end());
+    d.mapa_sucio = false;
+    if (anterior != mapa) {
+      d.del_mapa.clear();
+      d.mapa = mapa;
+      ++d.generacion;
+    }
+  }
+  if (!guardar.empty()) {
+    rex::x360::EncolarEscrituraSd([guardar = std::move(guardar), ruta = carpeta / (anterior + ".spv"), carpeta] {
+      std::error_code ec;
+      std::filesystem::create_directories(carpeta, ec);
+      std::vector<uint8_t> datos(8 + guardar.size() * 8);
+      const uint32_t cabecera[2] = {kMagiaPrecarga, uint32_t(guardar.size())};
+      std::memcpy(datos.data(), cabecera, 8);
+      std::memcpy(datos.data() + 8, guardar.data(), guardar.size() * 8);
+      if (!rex::x360::EscribirArchivoEnTrozos(ruta, datos.data(), datos.size())) {
+        REXLOG_WARN("[shaders] preload: {} could not be written", ruta.string());
+      }
+    });
+  }
+  if (anterior == mapa) return;
+  // The new map's list is read on the reader thread (opening a file on the card takes 10-50 ms), and each of its
+  // shaders not read yet is queued behind it, behind every read a draw asks for.
+  const uint64_t generacion = d.generacion;
+  {
+    std::lock_guard<std::mutex> l(d.cola_candado);
+    if (!d.ArrancarLector()) return;
+    d.cola.push_back([this, ruta = carpeta / (mapa + ".spv"), mapa, generacion] {
+      Datos& d = *datos_;
+      std::vector<uint64_t> huellas;
+      if (std::FILE* f = std::fopen(ruta.string().c_str(), "rb")) {
+        uint32_t cabecera[2] = {};
+        if (std::fread(cabecera, 4, 2, f) == 2 && cabecera[0] == kMagiaPrecarga &&
+            cabecera[1] <= uint32_t(std::max(REXCVAR_GET(xmow_precarga_max), 0))) {
+          huellas.resize(cabecera[1]);
+          if (std::fread(huellas.data(), 8, huellas.size(), f) != huellas.size()) huellas.clear();
+        }
+        std::fclose(f);
+      }
+      uint32_t encolados = 0, ya = 0, desconocidos = 0;
+      {
+        std::lock_guard<std::mutex> lock(d.lectura);
+        if (d.generacion != generacion) return;  // another map came meanwhile
+        for (const uint64_t h : huellas) d.del_mapa.insert(h);  // the saved list only grows
+      }
+      for (const uint64_t h : huellas) {
+        const auto it = d.por_huella_contenedor.find(h);
+        if (it == d.por_huella_contenedor.end()) {
+          ++desconocidos;
+        } else if (d.completa[it->second].load(std::memory_order_acquire) != 0) {
+          ++ya;
+        } else {
+          Encolar(it->second, false);
+          ++encolados;
+        }
+      }
+      REXLOG_INFO("[shaders] preload for map {}: {} shaders in its list, {} queued, {} already read, {} not in this "
+                  "library", mapa, huellas.size(), encolados, ya, desconocidos);
+    });
+  }
+  d.cola_hay.notify_one();
+}
+
+Biblioteca::Lecturas Biblioteca::lecturas() const {
+  const Datos& d = *datos_;
+  return {d.ns_en_el_acto.load(std::memory_order_relaxed), d.ns_fondo.load(std::memory_order_relaxed),
+          d.fondo.load(std::memory_order_relaxed), d.precargadas.load(std::memory_order_relaxed),
+          d.no_listas.load(std::memory_order_relaxed)};
 }
 
 const EntradaShader* Biblioteca::PorContenedor(std::span<const uint8_t> contenedor) const {
@@ -408,7 +609,7 @@ const EntradaShader* Biblioteca::PorContenedor(std::span<const uint8_t> contened
   if (!shader) return nullptr;
   const auto it = d.por_shader.find(shader);
   const EntradaShader* e = it != d.por_shader.end() ? &d.entradas[it->second] : nullptr;
-  Completar(e);
+  Completar(e, false);
   return e;
 }
 
@@ -480,7 +681,7 @@ void Biblioteca::RegistrarObjeto(rex::memory::Memory* memoria, uint32_t objeto, 
 const EntradaShader* Biblioteca::Identificar(bool vertices, uint32_t fisica,
                                              std::span<const uint32_t> microcodigo) {
   const EntradaShader* e = IdentificarEntrada(vertices, fisica, microcodigo);
-  Completar(e);
+  Completar(e, true);
   return e;
 }
 

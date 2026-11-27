@@ -1,0 +1,24 @@
+Licenses of the parts of this package
+
+xmow_setup.exe                 GPL-3.0-or-later (GPL-3.0.txt). Its own XDVDFS reader, XEX2 loader, AES-128 and SHA-256.
+                               Uses xxHash (xxHash-BSD-2-Clause.txt).
+tools\ds_hlsl.exe              GPL-3.0 (gears2-nx ds_* tools) + XenosRecomp (XenosRecomp-MIT.txt), fmt (fmt-MIT.txt),
+                               xxHash.
+tools\ds_empaquetar.exe        GPL-3.0 + xxHash.
+tools\xmow_extract_shaders.exe GPL-3.0 + libmspack lzxd (libmspack-LGPL-2.1.txt) + xxHash.
+tools\ds_dksh_0123.exe,        GPL-3.0 + uam (uam-zlib-and-Mesa-MIT.txt), SPIRV-Cross (SPIRV-Cross-Apache-2.0.txt),
+tools\ds_dksh_0127.exe,        fmt, xxHash. ds_dksh_0127 and ds_vs_plegado use uam with the XMOW post-factor fix
+tools\ds_vs_plegado.exe        (patch in the source, tools/installer/patches/uam-postfactor-0127.patch).
+tools\dxc.exe, dxcompiler.dll  DirectXShaderCompiler v1.8.2407 (Microsoft), University of Illinois/NCSA Open Source
+                               License (DXC-NCSA-LLVM.txt, LICENSE.TXT of the v1.8.2407 tag, commit 416fab6b5).
+The executables are linked statically with the llvm-mingw runtime (Apache-2.0 WITH LLVM-exception).
+
+Source code: everything needed to rebuild xmow_setup.exe and the tools above is in the XMOW-nx repository,
+tools/installer/ (docs/installer.md). libmspack (LGPL-2.1): the exact library source used (libmspack/mspack of
+https://github.com/kyz/libmspack commit 305907723a4e7ab2018e58040059ffb5e77db837, unmodified) is in
+tools/installer/third_party/libmspack, so xmow_extract_shaders.exe can be rebuilt or relinked against a modified
+libmspack with tools/installer/build.ps1.
+
+No file of the game is in this package except, in data\variantes.tsv, the u32 words that differ between 67 shader
+variants recorded on the console and their disc shaders (about 4 KB, 2 of them whole containers of 156 and 180 bytes).
+Everything else is built from your own disc.

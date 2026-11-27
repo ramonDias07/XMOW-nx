@@ -76,6 +76,10 @@ ABI_MOD = ALL & ~NONVOL & ~mask(["r1", "r13"])
 GUARD_REF = mask(["r1", "r13", "lr", "r3"])  # REX_FUNC_PROLOGUE's stack guard (gow2_stack_cut logs lr, r3, r1)
 GUARD_MOD = mask(["r3"])                     # ... and answers 0
 TRAP_REF = mask(["r3", "r4"])
+IND_EXTRA = mask(["r0", "r11", "r12"])  # xmow: written back (when dirty) before an indirect call too
+# xmow: registers a function should not take from its caller (not arguments, not the stack/thread pointers): what
+# the keep file's "auto" entry looks for in each function's own text (MSVC EH/SEH funclets: r12 or r31 = the frame).
+ENTRY_SUSPECT = mask(["r0", "r11", "r12"] + [f"r{i}" for i in range(14, 32)] + [f"f{i}" for i in range(14, 32)])
 CHECK = os.environ.get("PLR_CHECK") == "1"
 # Imports that look at the whole register state (a context for a crash report or an exception): this function's
 # registers are all written back before them (the callers' non-volatiles may be stale there).
@@ -103,9 +107,11 @@ EA_D = re.compile(r"^ea = (-?\d+) \+ ctx\.(r\d+)\.u32;$")
 EA_X = re.compile(r"^ea = ctx\.(r\d+)\.u32 \+ ctx\.(r\d+)\.u32;$")
 STWU = re.compile(r"^REX_STORE_U32\(ea, ctx\.(r\d+)\.u32\);$")
 R1_EA = re.compile(r"^ctx\.r1\.u32 = ea;$")
-BACKCHAIN = re.compile(r"^ctx\.r1\.u64 = REX_S?LOAD_U32\(ctx\.r1\.u32 \+ 0\);$")
-SAVE = re.compile(r"^REX_SSTORE_U64\(ctx\.(r\d+)\.u32 \+ (-?\d+), ctx\.((?:r|f)\d+)\.u64\);$")
-RESTORE = re.compile(r"^ctx\.((?:r|f)\d+)\.u64 = REX_SLOAD_U64\(ctx\.(r\d+)\.u32 \+ (-?\d+)\);$")
+# lote C: tambem as formas D do dform_disp_split (REX_SLOAD_D_U32(ctx.r1.u32, 0), REX_SSTORE_D_U64(ctx.r1.u32, -16,
+# ctx.r31.u64)); os grupos sao os mesmos.
+BACKCHAIN = re.compile(r"^ctx\.r1\.u64 = REX_S?LOAD_(?:D_)?U32\(ctx\.r1\.u32(?: \+ |, )0\);$")
+SAVE = re.compile(r"^REX_SSTORE_(?:D_)?U64\(ctx\.(r\d+)\.u32(?: \+ |, )(-?\d+), ctx\.((?:r|f)\d+)\.u64\);$")
+RESTORE = re.compile(r"^ctx\.((?:r|f)\d+)\.u64 = REX_SLOAD_(?:D_)?U64\(ctx\.(r\d+)\.u32(?: \+ |, )(-?\d+)\);$")
 
 
 def code_part(line):
@@ -203,6 +209,8 @@ class Func:
         gotos = []
         # For each open brace: whether what is inside may not run (opened by an if/else/switch line).
         cond_stack = []
+        open_at = []      # line of each open brace
+        skip_edges = []   # (line opening a conditional block, line closing it)
         for i, line in enumerate(body):
             lm = LABEL.match(line)
             if lm:
@@ -252,8 +260,16 @@ class Func:
             for ch in code:
                 if ch == "{":
                     cond_stack.append(conditional)
+                    open_at.append(i)
                 elif ch == "}" and cond_stack:
-                    cond_stack.pop()
+                    # xmow: a block that may not run (the codegen's conditional tail call
+                    # `if (c) {\n call;\n return;\n }`, a switch) also goes from its opening line straight to its
+                    # closing one. Without this edge the only way past the block was through it, and a tail call
+                    # in it (which leaves nothing dirty) wiped the dirty set of the path that skips it: the
+                    # registers written before were never written back (0.1.0: sub_82C43B08's r31, F8000028).
+                    if cond_stack.pop() and open_at[-1] != i:
+                        skip_edges.append((open_at[-1], i))
+                    open_at.pop()
             depth += code.count("{") - code.count("}")
         if depth != 1:
             raise Skip("unbalanced braces")
@@ -287,6 +303,10 @@ class Func:
                     raise Skip("goto to unknown label " + g)
                 succ.append(labels[g])
             self.succ[i] = succ
+        for a, b in skip_edges:
+            if b not in self.succ[a]:
+                self.succ[a].append(b)
+        self.skip_edges = len(skip_edges)
         self.used = 0
         self.written = 0
         for i in range(n):
@@ -575,10 +595,32 @@ def phase1(args):
     path, helpers = args
     _, funcs = parse_file(path, helpers)
     out = {}
+    entry = {}
+    edges = 0
     for name, _, _, f in funcs:
         # A function the pass cannot follow (another use of ctx) may read and change anything.
         out[name] = summarize(f) if f is not None and f.ok else None
-    return out
+        if f is not None:
+            edges += f.skip_edges
+            # xmow: what it reads of its caller's registers by its own text (calls read nothing here).
+            s = out[name] or summarize(f)
+            # The saves of the straight-line prologue are not reads (even where PRES could not be proved).
+            nodes = list(s["nodes"])
+            for k in range(f.start, f.n):
+                code = code_part(f.body[k]).strip()
+                if LABEL.match(f.body[k]) or f.calls[k] or GOTO.search(code) or "return;" in code or \
+                        "if (" in code or "switch" in code:
+                    break
+                sm = SAVE.match(code)
+                if sm and nonvolatile(sm.group(3)):
+                    use, kill, call, succ, tail, ret = nodes[k]
+                    nodes[k] = (use & ~(1 << BIT[sm.group(3)]), kill, call, succ, tail, ret)
+            s = dict(s, nodes=nodes)
+            live, _ = liveness(s, {}, {}, set(), set(), 0, False)
+            m = (live[s["start"]] if s["start"] < len(s["nodes"]) else 0) & ENTRY_SUSPECT
+            if m:
+                entry[name] = m
+    return out, entry, edges
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -890,6 +932,10 @@ def rewrite(f, ref, mod, liveout, hooked, defined, sites=None):
 
             def wrap(kind, target, text):
                 r, m = site(kind, target)
+                if kind == "i":
+                    # xmow: through a pointer also r0/r11/r12 when they changed here (an MSVC EH/SEH funclet
+                    # takes its parent's frame in r12; cheap: they are rarely dirty at a bctrl).
+                    r |= IND_EXTRA
                 if kind == "t":
                     return "{ " + flush(here, names) + text + " }"
                 if kind == "s" or (target or "").replace("__imp__", "", 1) in CTX_IMPORTS:
@@ -942,7 +988,7 @@ def rewrite(f, ref, mod, liveout, hooked, defined, sites=None):
 
 
 def phase3(args):
-    path, helpers, ref, mod, liveout, hooked, defined = args
+    path, helpers, ref, mod, liveout, hooked, defined, norewrite = args
     lines, funcs = parse_file(path, helpers)
     m = re.search(r"xmow_recomp\.(\d+)\.cpp$", path)
     sites = {"base": (int(m.group(1)) if m else 255) << 16, "list": []}
@@ -952,7 +998,9 @@ def phase3(args):
     for name, a, b, f in funcs:
         out.extend(lines[last:a + 1])
         new = None
-        if f is not None and f.ok:
+        if name in norewrite:
+            pass  # xmow: keep list (local_regs_keep.txt): stays on ctx.rN
+        elif f is not None and f.ok:
             new = rewrite(f, ref, mod, liveout, hooked, defined, sites)
             done += 1
         elif f is not None:
@@ -965,6 +1013,9 @@ def phase3(args):
 
 
 def main(argv):
+    keep_file = None
+    if argv[:1] == ["--keep"]:
+        keep_file, argv = argv[1], argv[2:]
     if "--" not in argv:
         sys.exit(__doc__)
     i = argv.index("--")
@@ -978,8 +1029,15 @@ def main(argv):
         return 0
     with ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
         summ = {}
-        for part in ex.map(phase1, [(p, helpers) for p in files]):
+        entry = {}
+        edges = 0
+        for part, ent, ed in ex.map(phase1, [(p, helpers) for p in files]):
             summ.update(part)
+            entry.update(ent)
+            edges += ed
+        norewrite = set()
+        if keep_file:
+            norewrite = apply_keep(keep_file, files, summ, entry)
         ref, mod = fixpoint(summ, hooked)
         defined = set(summ)
         native = set()
@@ -997,7 +1055,8 @@ def main(argv):
                         open(os.environ["PLR_DUMP"], "wb"))
         done = skipped = 0
         site_list = []
-        for d, s, sl in ex.map(phase3, [(p, helpers, ref, mod, liveout, hooked, defined) for p in files]):
+        for d, s, sl in ex.map(phase3, [(p, helpers, ref, mod, liveout, hooked, defined, norewrite)
+                                        for p in files]):
             done += d
             skipped += s
             site_list.extend(sl)
@@ -1012,7 +1071,67 @@ def main(argv):
                 fo.write(k + " " + " ".join(r for r in NAMES if v >> BIT[r] & 1) + "\n")
     print(f"patch_local_regs: {done} functions with registers in locals, {skipped} left as they were; "
           f"{nv_ref} functions read a caller's non-volatile register")
+    print(f"patch_local_regs: {edges} conditional blocks given a skip edge; {len(norewrite)} kept on ctx by "
+          f"{keep_file or 'no keep file'}; {len(entry)} functions read r0/r11/r12/r14-r31/f14-f31 at entry")
+    if CHECK:
+        print("patch_local_regs: PLR_CHECK=1 (check build: regcheck sites in place)")
     return 0
+
+
+def apply_keep(path, files, summ, entry):
+    """xmow: the keep list. Each line: <target> [keep|opaque]  (# comments). Target: sub_XXXXXXXX, 0xXXXXXXXX,
+    0xLO-0xHI (addresses LO <= a < HI) or auto (every function whose own text reads r0/r11/r12/r14-r31/f14-f31 before
+    writing them: EH/SEH funclets and the like). Default kind: opaque.
+      keep    not rewritten (stays on ctx.rN); its REF/MOD still come from its text, so its callers lose nothing.
+      opaque  not rewritten, and taken to read and change every register (REF = MOD = everything): its callers write
+              back every changed register before calling it and read back all theirs after it.
+    Returns the names not to rewrite; the opaque ones get no summary (summ[name] = None)."""
+    addr = {}
+    init = os.path.join(os.path.dirname(os.path.abspath(files[0])), "xmow_init.cpp")
+    if os.path.exists(init):
+        for a, n in re.findall(r"\{ 0x([0-9A-F]{8}), (\w+) \}", open(init, encoding="utf-8", errors="replace").read()):
+            addr.setdefault(n, int(a, 16))
+    for n in summ:
+        m = re.fullmatch(r"sub_([0-9A-F]{8})", n)
+        if m:
+            addr.setdefault(n, int(m.group(1), 16))
+    kinds = {}
+    stats = {}
+    for raw in open(path, encoding="utf-8"):
+        line = raw.split("#", 1)[0].split()
+        if not line:
+            continue
+        target, kind = line[0], (line[1] if len(line) > 1 else "opaque")
+        if kind not in ("keep", "opaque"):
+            sys.exit(f"patch_local_regs: {path}: unknown kind {kind!r}")
+        if target == "auto":
+            # (not the register save/restore helpers: reading r12 and the non-volatiles is what they are for, they
+            # are copied into their callers, and the analysis follows their direct calls)
+            names = {n for n in entry if not n.startswith(("__save", "__rest"))}
+        elif "-" in target:
+            lo, hi = (int(x, 16) for x in target.split("-"))
+            names = {n for n, a in addr.items() if lo <= a < hi and n in summ}
+        else:
+            t = target if target.startswith("sub_") else "sub_%08X" % int(target, 16)
+            names = {t} if t in summ else set()
+            if not names:
+                print(f"patch_local_regs: keep: {target} is not a function here", file=sys.stderr)
+        stats[target] = len(names)
+        for n in names:
+            if kinds.get(n) != "opaque":
+                kinds[n] = kind
+    opaque = {n for n, k in kinds.items() if k == "opaque"}
+    for n in opaque:
+        summ[n] = None
+    report = os.environ.get("PLR_KEEP_REPORT")
+    if report:
+        with open(report, "w") as fo:
+            for n in sorted(kinds):
+                regs = " ".join(r for r in NAMES if entry.get(n, 0) >> BIT[r] & 1)
+                fo.write(f"{n} {kinds[n]} {regs}\n")
+    print("patch_local_regs: keep: " + ", ".join(f"{t} {c}" for t, c in stats.items()) +
+          f"; {len(kinds)} functions ({len(opaque)} opaque)")
+    return set(kinds)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+# arquivo	tamanho	sha256 (release 0.1.34f, entregas/release-0.1.34f/SHA256.txt)
+xmow_shaders.dslib	270376072	c0003d1c6fbfe12b916b913fded655f21f722178f823601555ca4f87febe4d22
+shadercache_dksh.bin	569797952	14a0b9743b14264f2e213982dc03cb44bfeb9a8cef6c9e56c491ab3536175319
+shadercache_dksh_fix.bin	77952	241a25fbdf83a4fe8a171ac872a8c70ca811249bdf10e617d7319a736f28bc61
+shadercache_dksh_vs.bin	7170792	07194928844c5e385b783f945cdb2ef1b8eaceef94db6591e17cd60cfbd608bf

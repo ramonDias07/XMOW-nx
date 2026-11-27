@@ -4,6 +4,7 @@
 #include "xmow_gpu_boost.h"
 
 #include <atomic>
+#include <cstdint>
 
 #include <pthread.h>
 
@@ -17,6 +18,8 @@
 REXCVAR_DEFINE_BOOL(xmow_gpu_boost, false, "XMOW",
                     "Official GPU profile of 460.8 MHz (apm), handheld only; docked it does nothing. Turning it off "
                     "restores the previous profile. Live.");
+// 0.1.28: CPU BOOST (TEST) and PEAK BOOST (TEST) of 0.1.26 removed (test 34, ANALISE.md section 3): this file
+// only asks the system for its official handheld GPU profile through apm; nothing here sets a clock directly.
 REXCVAR_DEFINE_BOOL(xmow_gpu_boost_ram1600, true, "XMOW",
                     "The GPU boost uses the official handheld mode GPU 460 + RAM 1600 (fixes audio crackle at stock "
                     "CPU). Live.");

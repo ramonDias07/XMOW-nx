@@ -1,0 +1,26 @@
+diff --git a/thirdparty/uam/mesa-imported/codegen/nv50_ir_peephole.cpp b/thirdparty/uam/mesa-imported/codegen/nv50_ir_peephole.cpp
+index f12f68f..7533067 100644
+--- a/thirdparty/uam/mesa-imported/codegen/nv50_ir_peephole.cpp
++++ b/thirdparty/uam/mesa-imported/codegen/nv50_ir_peephole.cpp
+@@ -899,7 +899,10 @@ ConstantFolding::tryCollapseChainedMULs(Instruction *mul2,
+             mul2->def(0).replace(mul1->getDef(0), false);
+             mul1->saturate = mul2->saturate;
+          } else
+-         if (prog->getTarget()->isPostMultiplySupported(OP_MUL, f, e)) {
++         // XMOW 0.1.27: mul1 may already carry a post factor (folded from an earlier "mul x, imm"); the new one is
++         // their product. Overwriting it lost that factor: c = (x * 0.25) * w, d = c * 0.25 gave x * w * 0.25
++         // instead of / 16 (Wolverine's DOF downsample, 4 times too bright). Out of the -3..3 range: not folded.
++         if (prog->getTarget()->isPostMultiplySupported(OP_MUL, f * exp2f(mul1->postFactor), e)) {
+             // c = mul a, b
+             // d = mul c, imm   -> d = mul_x_imm a, b
+             mul1->postFactor = e;
+@@ -925,7 +928,8 @@ ConstantFolding::tryCollapseChainedMULs(Instruction *mul2,
+       if (insn->op == OP_MUL && insn->dType == TYPE_F32)
+          if (!insn->src(s2).mod && !insn->src(t2).getImmediate(imm1))
+             mul2 = insn;
+-      if (mul2 && prog->getTarget()->isPostMultiplySupported(OP_MUL, f, e)) {
++      // XMOW 0.1.27: the same for a post factor mul2 already has.
++      if (mul2 && prog->getTarget()->isPostMultiplySupported(OP_MUL, f * exp2f(mul2->postFactor), e)) {
+          mul2->postFactor = e;
+          mul2->setSrc(s2, mul1->src(t));
+          if (f < 0)

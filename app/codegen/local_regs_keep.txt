@@ -1,0 +1,304 @@
+# Lista de excecao do patch_local_regs (lote B, 23/11/2026). Lida por tools/patch_local_regs.py --keep (gerar.ps1).
+# Formato: <alvo> [keep|opaque]   alvo = sub_XXXXXXXX | 0xXXXXXXXX | 0xLO-0xHI (LO <= a < HI) | auto
+#   keep    a funcao nao e reescrita (fica em ctx.rN); REF/MOD dela continuam vindo do texto (custo zero p/ quem chama)
+#   opaque  nao e reescrita e conta como "le e muda todos os registradores": quem chama grava tudo o que mudou
+#           antes da chamada e rele tudo depois (o mais seguro; para funclets de EH/SEH e afins)
+# Se uma funcao cai em mais de uma linha, opaque ganha.
+
+# 1. CRT / tratamento de excecao inteiros (frios; funclets __try/__except/__finally, _CallSettingFrame etc.)
+0x82C20000-0x82C50000 keep
+0x82E98000-0x82E9B000 keep
+
+# 2. Toda funcao cujo proprio texto le r0/r11/r12/r14-r31/f14-f31 antes de escrever (fora os salvamentos do
+#    prologo e os helpers __savegpr/__restgpr): calculado a cada geracao, lista em patch_local_regs.keep.txt.
+auto opaque
+
+# 3. Lista congelada do levantamento anterior (rbw2: 51 leem r12, 8 leem r11, 73 leem nao-volatil GPR/FPR na
+#    entrada). Redundante com "auto", fica para nao depender so da deteccao.
+sub_82C1BE88 opaque  # NA r11
+sub_82C25EC8 opaque  # NA r12
+sub_82C25EF4 opaque  # NA r12
+sub_82C25FFC opaque  # NA r12
+sub_82C2601C opaque  # NA r12
+sub_82C26534 opaque  # NA r12
+sub_82C26554 opaque  # NA r12
+sub_82C297F8 opaque  # NA r12
+sub_82C29948 opaque  # NA r12
+sub_82C29968 opaque  # NA r12
+sub_82C29BA0 opaque  # NA r12
+sub_82C29BC0 opaque  # NA r12
+sub_82C29F20 opaque  # NA r12
+sub_82C29F40 opaque  # NA r12
+sub_82C2AD10 opaque  # NA r12
+sub_82C2AD30 opaque  # NA r12
+sub_82C2AEF8 opaque  # NA r12
+sub_82C2AF18 opaque  # NA r12
+sub_82C2B228 opaque  # NA r12
+sub_82C2B248 opaque  # NA r12
+sub_82C2B284 opaque  # NA r12
+sub_82C2BB5C opaque  # NA r12
+sub_82C2BB7C opaque  # NA r12
+sub_82C2C5F0 opaque  # NA r12
+sub_82C2C610 opaque  # NA r12
+sub_82C2C7D4 opaque  # NA r12
+sub_82C2C7F4 opaque  # NA r12
+sub_82C328BC opaque  # NA r12
+sub_82C328DC opaque  # NA r12
+sub_82C34504 opaque  # NA r12
+sub_82C34524 opaque  # NA r12
+sub_82C34830 opaque  # NA r12
+sub_82C34850 opaque  # NA r12
+sub_82C36184 opaque  # NA r12
+sub_82C361A4 opaque  # NA r12
+sub_82C36E8C opaque  # NA r12
+sub_82C36EAC opaque  # NA r12
+sub_82C39F50 opaque  # NA r12
+sub_82C39F70 opaque  # NA r12
+sub_82C3A720 opaque  # NA r12
+sub_82C3A740 opaque  # NA r12
+sub_82C43794 opaque  # NA r12
+sub_82C437BC opaque  # NA r12
+sub_82C43A8C opaque  # NA r12
+sub_82C43AB4 opaque  # NA r12
+sub_82C44350 opaque  # NA r12
+sub_82C44370 opaque  # NA r12
+sub_82CF78B8 opaque  # NA r11
+sub_82D652E0 opaque  # NA r11
+sub_82DF0570 opaque  # NA r11
+sub_82E99CB8 opaque  # NA r12
+sub_82E99CD8 opaque  # NA r12
+sub_82E9A248 opaque  # NA r12
+sub_82E9AAA8 opaque  # NA r12
+sub_82E9AAD4 opaque  # NA r12
+sub_831137F0 opaque  # NA r11
+sub_83113BC8 opaque  # NA r11
+sub_83113C30 opaque  # NA r11
+sub_83118DF8 opaque  # NA r11
+sub_8237BC58 opaque  # NV r22
+sub_82BC2A08 opaque  # NV r31
+sub_82BC2B08 opaque  # NV r31
+sub_82C026C0 opaque  # NV r30
+sub_82C0C0D8 opaque  # NV r30
+sub_82C17250 opaque  # NV r30
+sub_82C1B9E0 opaque  # NV r30
+sub_82C25EF4 opaque  # NV r29 r28
+sub_82C2601C opaque  # NV r30
+sub_82C26554 opaque  # NV r30
+sub_82C29968 opaque  # NV r28
+sub_82C29BC0 opaque  # NV r30
+sub_82C29F40 opaque  # NV r30
+sub_82C2AD30 opaque  # NV r30
+sub_82C2AF18 opaque  # NV r30
+sub_82C2B248 opaque  # NV r30
+sub_82C2BB7C opaque  # NV r24
+sub_82C2C1C8 opaque  # NV r30
+sub_82C2C610 opaque  # NV r30
+sub_82C2C7F4 opaque  # NV r27
+sub_82C328DC opaque  # NV r30
+sub_82C34524 opaque  # NV r30
+sub_82C34850 opaque  # NV r30
+sub_82C361A4 opaque  # NV r30
+sub_82C36498 opaque  # NV r31
+sub_82C36738 opaque  # NV r31
+sub_82C36EAC opaque  # NV r28
+sub_82C39F70 opaque  # NV r30
+sub_82C3A740 opaque  # NV r30
+sub_82C437BC opaque  # NV r22 r28
+sub_82C43AB4 opaque  # NV r26 r30
+sub_82C4432C opaque  # NV r31
+sub_82C44338 opaque  # NV r31
+sub_82C44370 opaque  # NV r21
+sub_82C467F0 opaque  # NV r31
+sub_82C470E0 opaque  # NV r31
+sub_82C4CAC0 opaque  # NV r30
+sub_82C4CE50 opaque  # NV r30
+sub_82C4E2A0 opaque  # NV r31 r27
+sub_82CABF60 opaque  # NV r30
+sub_82D0C770 opaque  # NV r30
+sub_82D75AB0 opaque  # NV r31
+sub_82D83480 opaque  # NV r30
+sub_82DA0240 opaque  # NV f28 f27
+sub_82DE79C0 opaque  # NV r31 r23
+sub_82E56128 opaque  # NV r26
+sub_82E60060 opaque  # NV r29
+sub_82E98B20 opaque  # NV f14 f15 f16 f17 f18 f19 f20 f21 f22 f23 f24 f25 f26 f27 f28 f29 f30 f31 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31
+sub_82E99CD8 opaque  # NV r29
+sub_82E9AAD4 opaque  # NV r30 r28
+sub_830D3D68 opaque  # NV r29
+sub_830ED240 opaque  # NV r31
+sub_830F9370 opaque  # NV r30
+sub_830F94E0 opaque  # NV r31
+sub_830FB230 opaque  # NV r30
+sub_830FE948 opaque  # NV r31 r26
+sub_83106F70 opaque  # NV r28
+sub_8310C730 opaque  # NV r20
+sub_8310D040 opaque  # NV r31
+sub_83114F50 opaque  # NV r31
+sub_8311C638 opaque  # NV r25 r19
+sub_83136E78 opaque  # NV r30
+sub_83137EA8 opaque  # NV r31
+sub_83153A38 opaque  # NV r30
+sub_831611F0 opaque  # NV r29
+sub_8317C248 opaque  # NV r29
+sub_8317F7E0 opaque  # NV r31
+sub_831806B0 opaque  # NV r22
+sub_8318E110 opaque  # NV r29
+sub_83192BF8 opaque  # NV r30 r31
+sub_83193358 opaque  # NV r29
+sub_83193CB8 opaque  # NV r30
+sub_831BBF88 opaque  # NV r28
+
+# 4. Lote C (23/11/2026): as 149 funcoes que o "auto" pegava com o gerador 0.10 e deixa de pegar com o do fork
+#    (144 fora da faixa CRT/EH; 5 dentro dela, que ficariam so keep).
+#    Falso positivo do texto antigo: o divw/divwu/fcti* do 0.10 e um ternario (cond ? a/b : 0) e o passe trata linha
+#    com "?" como escrita condicional, entao o registrador parecia lido na entrada; o fork escreve rex::ppc::divw(...).
+#    Ficam opaque para o codigo continuar igual ao testado na 0.1.18 (registradores entre o "#" e o fim: os do 0.10).
+sub_82366780 opaque  # lote C, auto no 0.10: r20 r28
+sub_82375068 opaque  # lote C, auto no 0.10: r28
+sub_823752D0 opaque  # lote C, auto no 0.10: r29
+sub_82376870 opaque  # lote C, auto no 0.10: r27 r28
+sub_82380390 opaque  # lote C, auto no 0.10: r21
+sub_823832D8 opaque  # lote C, auto no 0.10: r30
+sub_82501880 opaque  # lote C, auto no 0.10: r29
+sub_82557298 opaque  # lote C, auto no 0.10: r19 r20
+sub_82557B10 opaque  # lote C, auto no 0.10: r23 r24
+sub_82570370 opaque  # lote C, auto no 0.10: r24
+sub_825F23C8 opaque  # lote C, auto no 0.10: r26
+sub_825F25F8 opaque  # lote C, auto no 0.10: r26
+sub_825F3778 opaque  # lote C, auto no 0.10: r27
+sub_825F3988 opaque  # lote C, auto no 0.10: r25
+sub_82630720 opaque  # lote C, auto no 0.10: r27 r30
+sub_8263E298 opaque  # lote C, auto no 0.10: r21 r24
+sub_82644C68 opaque  # lote C, auto no 0.10: r15 r16 r23
+sub_82649EB0 opaque  # lote C, auto no 0.10: r17 r25
+sub_8266D020 opaque  # lote C, auto no 0.10: r14 r21 r25 r28
+sub_8266D8C0 opaque  # lote C, auto no 0.10: r25 r26
+sub_8266DB60 opaque  # lote C, auto no 0.10: r14 r22 r25 r28
+sub_82670328 opaque  # lote C, auto no 0.10: r26 r27
+sub_82670468 opaque  # lote C, auto no 0.10: r27 r28
+sub_826708E0 opaque  # lote C, auto no 0.10: r23 r24
+sub_826B55E8 opaque  # lote C, auto no 0.10: r25 r26 r27 r29
+sub_826C36F8 opaque  # lote C, auto no 0.10: r20 r21
+sub_82808390 opaque  # lote C, auto no 0.10: r23
+sub_8280C350 opaque  # lote C, auto no 0.10: r27
+sub_828200D0 opaque  # lote C, auto no 0.10: r30
+sub_82852958 opaque  # lote C, auto no 0.10: f28 f29
+sub_829040C8 opaque  # lote C, auto no 0.10: r25
+sub_829E3C18 opaque  # lote C, auto no 0.10: r31
+sub_82AB2318 opaque  # lote C, auto no 0.10: r27
+sub_82AE13F8 opaque  # lote C, auto no 0.10: r16
+sub_82AE2D10 opaque  # lote C, auto no 0.10: r28 r29
+sub_82B11DF0 opaque  # lote C, auto no 0.10: f25
+sub_82B2F8E8 opaque  # lote C, auto no 0.10: r31
+sub_82B32458 opaque  # lote C, auto no 0.10: r30
+sub_82B345E0 opaque  # lote C, auto no 0.10: r18 r29
+sub_82B46190 opaque  # lote C, auto no 0.10: r25
+sub_82B986D8 opaque  # lote C, auto no 0.10: r11
+sub_82BD0790 opaque  # lote C, auto no 0.10: r26 r27
+sub_82C1C2E8 opaque  # lote C, auto no 0.10: r30
+sub_82C6B350 opaque  # lote C, auto no 0.10: r27
+sub_82C78D60 opaque  # lote C, auto no 0.10: r27
+sub_82C7AB50 opaque  # lote C, auto no 0.10: r29
+sub_82C7C0E8 opaque  # lote C, auto no 0.10: r23 r26 r28 r30
+sub_82C7C6D0 opaque  # lote C, auto no 0.10: r18 r20 r27 r29
+sub_82C93AA8 opaque  # lote C, auto no 0.10: r21 r22 r23
+sub_82CC0510 opaque  # lote C, auto no 0.10: r25
+sub_82CC6FE8 opaque  # lote C, auto no 0.10: r27 r28
+sub_82CC7308 opaque  # lote C, auto no 0.10: r27
+sub_82CC76C8 opaque  # lote C, auto no 0.10: r27
+sub_82CC7A70 opaque  # lote C, auto no 0.10: r27
+sub_82CC7E20 opaque  # lote C, auto no 0.10: r27 r28
+sub_82CC82E0 opaque  # lote C, auto no 0.10: r28
+sub_82CC8870 opaque  # lote C, auto no 0.10: r27
+sub_82CC8D88 opaque  # lote C, auto no 0.10: r27
+sub_82CC9388 opaque  # lote C, auto no 0.10: r27
+sub_82CEEF08 opaque  # lote C, auto no 0.10: r18
+sub_82CF63F8 opaque  # lote C, auto no 0.10: r24
+sub_82CF85A0 opaque  # lote C, auto no 0.10: r15
+sub_82D04388 opaque  # lote C, auto no 0.10: r21
+sub_82D04688 opaque  # lote C, auto no 0.10: r24
+sub_82D0BBF0 opaque  # lote C, auto no 0.10: r27
+sub_82D0C120 opaque  # lote C, auto no 0.10: r31
+sub_82D0C3F0 opaque  # lote C, auto no 0.10: r31
+sub_82D0EC98 opaque  # lote C, auto no 0.10: r26
+sub_82D0ED68 opaque  # lote C, auto no 0.10: r15
+sub_82D113B0 opaque  # lote C, auto no 0.10: r31
+sub_82D11D40 opaque  # lote C, auto no 0.10: r19
+sub_82D123A0 opaque  # lote C, auto no 0.10: r25
+sub_82D128C0 opaque  # lote C, auto no 0.10: r18 r30
+sub_82D12EB0 opaque  # lote C, auto no 0.10: r22 r26
+sub_82D137F0 opaque  # lote C, auto no 0.10: r27
+sub_82D140A0 opaque  # lote C, auto no 0.10: r21
+sub_82D14680 opaque  # lote C, auto no 0.10: r28
+sub_82D14DE0 opaque  # lote C, auto no 0.10: r29
+sub_82D16C70 opaque  # lote C, auto no 0.10: r28
+sub_82D17CC0 opaque  # lote C, auto no 0.10: r28
+sub_82D19060 opaque  # lote C, auto no 0.10: r18
+sub_82D1DCE8 opaque  # lote C, auto no 0.10: r30
+sub_82D1F878 opaque  # lote C, auto no 0.10: r21
+sub_82D37888 opaque  # lote C, auto no 0.10: r18
+sub_82D38AD0 opaque  # lote C, auto no 0.10: r28
+sub_82D39668 opaque  # lote C, auto no 0.10: r23
+sub_82D39D78 opaque  # lote C, auto no 0.10: r31
+sub_82D3ADE0 opaque  # lote C, auto no 0.10: r19
+sub_82D3BA58 opaque  # lote C, auto no 0.10: r18
+sub_82D3D5F8 opaque  # lote C, auto no 0.10: r27
+sub_82D3F4F8 opaque  # lote C, auto no 0.10: r30
+sub_82D40208 opaque  # lote C, auto no 0.10: r22
+sub_82D40428 opaque  # lote C, auto no 0.10: r22
+sub_82D405D8 opaque  # lote C, auto no 0.10: r21
+sub_82D40EB0 opaque  # lote C, auto no 0.10: r20
+sub_82D413D8 opaque  # lote C, auto no 0.10: r28
+sub_82D42860 opaque  # lote C, auto no 0.10: r23
+sub_82D47788 opaque  # lote C, auto no 0.10: r22
+sub_82D47A60 opaque  # lote C, auto no 0.10: r27
+sub_82D4AD68 opaque  # lote C, auto no 0.10: r18
+sub_82D4B9B8 opaque  # lote C, auto no 0.10: r24
+sub_82D4E9D8 opaque  # lote C, auto no 0.10: r31
+sub_82D4EAB8 opaque  # lote C, auto no 0.10: r31
+sub_82D55680 opaque  # lote C, auto no 0.10: r25
+sub_82D5CA80 opaque  # lote C, auto no 0.10: r11
+sub_82D8F778 opaque  # lote C, auto no 0.10: r11
+sub_82DAD7A0 opaque  # lote C, auto no 0.10: r22
+sub_82DE2F40 opaque  # lote C, auto no 0.10: r24 r28
+sub_82E87668 opaque  # lote C, auto no 0.10: r31
+sub_82E87748 opaque  # lote C, auto no 0.10: r31
+sub_82E8FC48 opaque  # lote C, auto no 0.10: r25
+sub_82E93788 opaque  # lote C, auto no 0.10: r28
+sub_82E95DF8 opaque  # lote C, auto no 0.10: r27 r30
+sub_82EA9808 opaque  # lote C, auto no 0.10: r28 r30
+sub_82EAA3A0 opaque  # lote C, auto no 0.10: r27
+sub_82EACAA8 opaque  # lote C, auto no 0.10: r28
+sub_82EB4158 opaque  # lote C, auto no 0.10: r25
+sub_82EB49F8 opaque  # lote C, auto no 0.10: r26
+sub_82EB6228 opaque  # lote C, auto no 0.10: r22
+sub_82F39C20 opaque  # lote C, auto no 0.10: r24 r27
+sub_82F67290 opaque  # lote C, auto no 0.10: r29
+sub_82F6FFC8 opaque  # lote C, auto no 0.10: r26
+sub_82F70B38 opaque  # lote C, auto no 0.10: r27 r28
+sub_82F711F0 opaque  # lote C, auto no 0.10: r28
+sub_82F940A8 opaque  # lote C, auto no 0.10: r29
+sub_82FACE60 opaque  # lote C, auto no 0.10: r24
+sub_82FC45D8 opaque  # lote C, auto no 0.10: r24
+sub_82FC8368 opaque  # lote C, auto no 0.10: r28 r29 r30
+sub_82FCC928 opaque  # lote C, auto no 0.10: r24 r26 r27 r28 r29
+sub_82FFBA40 opaque  # lote C, auto no 0.10: r31
+sub_830229A0 opaque  # lote C, auto no 0.10: r25
+sub_83033338 opaque  # lote C, auto no 0.10: r11
+sub_830333D0 opaque  # lote C, auto no 0.10: r11
+sub_830335C0 opaque  # lote C, auto no 0.10: r29
+sub_830471C0 opaque  # lote C, auto no 0.10: r29 r31
+sub_830497D0 opaque  # lote C, auto no 0.10: r30
+sub_8305CAD0 opaque  # lote C, auto no 0.10: r28 r30
+sub_8305D048 opaque  # lote C, auto no 0.10: r29
+sub_83063F78 opaque  # lote C, auto no 0.10: r27
+sub_83065470 opaque  # lote C, auto no 0.10: r26
+sub_83164770 opaque  # lote C, auto no 0.10: r18
+sub_831C47A0 opaque  # lote C, auto no 0.10: r28
+sub_831D99A8 opaque  # lote C, auto no 0.10: r31
+sub_83264148 opaque  # lote C, auto no 0.10: r30
+sub_82C2A9A0 opaque  # lote C, auto no 0.10 (faixa CRT/EH): r11
+sub_82C35EA0 opaque  # lote C, auto no 0.10 (faixa CRT/EH): r11
+sub_82C48C40 opaque  # lote C, auto no 0.10 (faixa CRT/EH): r22
+sub_82C48DC8 opaque  # lote C, auto no 0.10 (faixa CRT/EH): r17
+sub_82E9A580 opaque  # lote C, auto no 0.10 (faixa CRT/EH): r30

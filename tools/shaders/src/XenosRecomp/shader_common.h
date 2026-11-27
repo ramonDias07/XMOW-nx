@@ -106,6 +106,11 @@ struct NfsmwBloqueCompartidas { float4 v[31]; };
 // The first vertex index of the draw (the renderer's vmin): SV_VertexID counts from it. Vertex shaders that read the
 // Xenos vertex index (r0.x) add it back. Byte 488, after the 1/size pairs.
 #define g_IndiceBase               DS_COMPARTIDA_UINT(488)
+// XMOW 0.1.23: RB_COLOR_INFO..RB_COLOR3_INFO color_exp_bias (signed 6 bits at bit 20). The Xenos ROP scales each color
+// output by 2^bias (Xenia: dxbc_translator_om.cpp CompletePixelShader_WriteToRTVs and spirv_translator_rb.cpp, after the
+// alpha test, the whole float4). Bytes 0-15 hold bias << 23 per render target index (the renderer, dibujos.cpp), so
+// 0x3F800000 + word is the float 2^bias and an unwritten word (0) is 1.0.
+#define g_ColorExpBias(I)          asfloat(0x3F800000u + DS_COMPARTIDA_UINT((I) * 4))
 
 // deko3d: there is no specialization at bind time; the SDK (rex::deko3d::SpirvAGlsl) gives this constant its value before
 // uam compiles, and one DKSH is made per (shader, value).
@@ -296,6 +301,48 @@ float4 max4(float4 src0)
 {
     return max(max(src0.x, src0.y), max(src0.z, src0.w));
 }
+
+/*
+ * XMOW 0.1.23: the Xenos ALU rules (Xenia's spirv_translator_alu.cpp / dxbc_translator_alu.cpp).
+ *
+ * Shader Model 3 multiply: +-0 (or a flushed denormal) times anything, infinity and NaN included, is +0. Xenia checks
+ * min(|a|, |b|) == 0 (NMin: a NaN operand does not hide the zero; Maxwell's FMNMX returns the other operand too) and
+ * selects +0. Only used with ds_hlsl DS_MULTIPLICACION_XENOS=1 (ShaderRecompiler::multiplicacionXenos; off for the shipped
+ * library: 3.3 times the pixel shader code). The translator then calls these when the two operands differ and neither is a literal of the shader that
+ * is finite and non-zero in every component used (then IEEE gives the same value, the sign of a zero aside).
+ * Mad multiplies with this rule and then adds (not fused, as Xenia). Dot products: the same per product, summed in
+ * order. select(), not ?: (HLSL 2021 short-circuits ?: and DXC writes it as a branch).
+ */
+#define XE_OPS_MUL(T) \
+T xeMul(T a, T b) { return select(min(abs(a), abs(b)) == (T)0.0, (T)0.0, a * b); } \
+T xeMad(T a, T b, T c) { return xeMul(a, b) + c; }
+XE_OPS_MUL(float)
+XE_OPS_MUL(float2)
+XE_OPS_MUL(float3)
+XE_OPS_MUL(float4)
+#undef XE_OPS_MUL
+
+float xeDot(float2 a, float2 b) { float2 p = xeMul(a, b); return p.x + p.y; }
+float xeDot(float3 a, float3 b) { float3 p = xeMul(a, b); return (p.x + p.y) + p.z; }
+float xeDot(float4 a, float4 b) { float4 p = xeMul(a, b); return ((p.x + p.y) + p.z) + p.w; }
+
+// mulsprev2: -FLT_MAX unless ps is finite and not -FLT_MAX, src0.b is finite and src0.b > 0; then src0.a * ps.
+float xeMulsPrev2(float a, float b, float previous)
+{
+    const bool multiplica = previous != -FLT_MAX && abs(previous) <= FLT_MAX && abs(b) <= FLT_MAX && b > 0.0;
+    return select(multiplica, xeMul(a, previous), -FLT_MAX);
+}
+
+// The clamped forms (rcpc, rsqc): an infinity becomes +-FLT_MAX, NaN stays NaN; logc only maps -inf (log of 0) to
+// -FLT_MAX. The flushed forms (rcpf, rsqf): an infinity becomes a zero of the same sign. rcp, rsq and log are plain
+// IEEE (Xenia) only with DS_MULTIPLICACION_XENOS; otherwise the translator clamps them to +-FLT_MAX.
+float xeMaxFinito(float r) { return select(abs(r) == asfloat(0x7F800000u), asfloat((asuint(r) & 0x80000000u) | 0x7F7FFFFFu), r); }
+float xeCeroSiInfinito(float r) { return select(abs(r) == asfloat(0x7F800000u), asfloat(asuint(r) & 0x80000000u), r); }
+float xeLogc(float x) { const float r = log2(x); return select(r == -asfloat(0x7F800000u), -FLT_MAX, r); }
+float xeRcpc(float x) { return xeMaxFinito(1.0 / x); }
+float xeRcpf(float x) { return xeCeroSiInfinito(1.0 / x); }
+float xeRsqc(float x) { return xeMaxFinito(rsqrt(x)); }
+float xeRsqf(float x) { return xeCeroSiInfinito(rsqrt(x)); }
 
 
 float computeMipLevel(float2 pixelCoord)

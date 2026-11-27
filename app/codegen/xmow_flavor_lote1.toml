@@ -1,0 +1,16 @@
+# Lote C, etapa 1 ("lote 1 seguro"): opcoes do gerador do fork do LoS1-nx (sdk\src\codegen\config.cpp), incluido pelo
+# xmow_manifest.toml. Chaves de raiz (fora de qualquer tabela). So mudam a forma do C++; o resultado visivel ao guest e o mesmo.
+# Fora de proposito nesta etapa: non_volatile_as_local, non_argument_as_local (+ _keep), elide_lr_stores, fp_*_modeless,
+# fp_mode_lookahead (precisam de auditoria: read_before_write / non_argument_audit do sa2-nx).
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+dform_disp_split = true
+fctiwz_inline = true
+fcti_inline = true
+div_inline = true
+rotate_word_shifts = true
+dcbt_prefetch = true
+fp_copy_pairs = true
+fp_copy_forwarding = true

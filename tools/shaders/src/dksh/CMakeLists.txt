@@ -1,6 +1,6 @@
 # ds_dksh for Windows (clang/llvm-mingw): the gears2 tool, built against a snapshot of the patched SDK files
-# (DS_SDK_MIN = the prepared sdk/: include/rex/ui/deko3d + src/ui/deko3d/{glsl,cache_dksh}.cpp, gears2 patches 0009/0011/0044/0045)
-# and the Switch SDK's thirdparty (SPIRV-Cross, uam, xxHash; sdk/thirdparty from tools/switch_setup.py).
+# (shaders-g2/sdk-min: include/rex/ui/deko3d + src/ui/deko3d/{glsl,cache_dksh}.cpp, gears2 patches 0009/0011/0044/0045)
+# and the Switch SDK's thirdparty (SPIRV-Cross, uam, xxHash; sdk-nx-deko/thirdparty, same pinned commits as sdk-g2).
 #   cmake -S fuente/dksh -B bld/dksh -G Ninja -DCMAKE_BUILD_TYPE=Release -DDS_TERCEROS=<thirdparty> -DDS_SDK_MIN=<sdk-min>
 cmake_minimum_required(VERSION 3.20)
 project(ds_dksh C CXX)

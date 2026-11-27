@@ -52,7 +52,7 @@ void gow2_log_main_thread() {
 }
 
 // The check build of tools/patch_local_regs.py (PLR_CHECK=1): a call changed registers the analysis said it keeps.
-// Logged once per call site (its number, out/codegen/patch_local_regs.check.map), at most 256 sites, with each
+// Logged once per call site (its number, patch_local_regs.check.map), at most 256 sites, with each
 // register that changed (before -> after). A poisoned value a callee read shows up as a fault at 0x5Exxxxxx instead:
 // the low 24 bits are the site's number too.
 extern "C" void gow2_regcheck_fail(const char* function, const char* callee, int site, const char* regs,

@@ -82,8 +82,19 @@ struct Variante {
   size_t shader = 0;
   uint32_t especializacion = 0;
   uint32_t salidas = ~0u;
-  bool z_temprana = false;  // pixel shader with layout(early_fragment_tests) (the renderer's kVarianteZTemprana)
+  // xmow 1028: a pixel shader's variante_ps, the renderer's (sdk-g2/src/x360/deko/dibujos.cpp): kVarianteZTemprana
+  // (layout(early_fragment_tests)) and the 7e3 clamp bits with their revision. It is the cache key's variant as is.
+  uint32_t variante_ps = 0;
 };
+
+// The renderer's variant constants (dibujos.cpp), copied exactly: the console keys these variants with them.
+constexpr uint32_t kVarianteZTemprana = 1;
+constexpr uint32_t kVarianteLimite7e3Desplazamiento = 3;
+constexpr uint32_t kVarianteLimite7e3Mascara = 0xFu << kVarianteLimite7e3Desplazamiento;
+constexpr uint32_t kVarianteLimite7e3Revision = 2u << 8;
+constexpr uint32_t kVarianteLimite7e3Todo = kVarianteLimite7e3Mascara | (0xFu << 8);
+// The pixel shader variants this tool can make: early Z and the 7e3 clamp (not the glow ones, which change the SPIR-V).
+constexpr uint32_t kVariantesPsConocidas = kVarianteZTemprana | kVarianteLimite7e3Todo;
 
 // The renderer's DeclararZTemprana (sdk/src/x360/deko/dibujos.cpp), the same text in the same place: the console
 // keys this variant with variante 1 and must find the same DKSH.
@@ -91,6 +102,62 @@ void DeclararZTemprana(std::string& glsl) {
   size_t pos = glsl.find("\nlayout(");
   if (pos == std::string::npos) pos = glsl.find("\nvoid main(");
   glsl.insert(pos == std::string::npos ? glsl.size() : pos + 1, "layout(early_fragment_tests) in;\n");
+}
+
+// xmow 1028: the renderer's DeclararLimite7e3 (sdk-g2/src/x360/deko/dibujos.cpp, xmow 1024, revision 2), copied
+// verbatim: the same GLSL gives the same DKSH under the same key.
+bool DeclararLimite7e3(std::string& glsl, uint32_t mascara) {
+  std::string limites;
+  for (uint32_t i = 0; i < 4; ++i) {
+    if (!((mascara >> i) & 0x1)) {
+      continue;
+    }
+    const std::string prefijo = "\nlayout(location = " + std::to_string(i) + ") out vec4 ";
+    const size_t at = glsl.find(prefijo);
+    if (at == std::string::npos) {
+      continue;
+    }
+    const size_t inicio = at + prefijo.size();
+    const size_t fin = glsl.find(';', inicio);
+    if (fin == std::string::npos) {
+      continue;
+    }
+    const std::string nombre = glsl.substr(inicio, fin - inicio);
+    if (nombre.empty() || nombre.find_first_of(" [(") != std::string::npos) {
+      continue;
+    }
+    // A select, not a multiply: NaN and -inf go to 0 (0 * -inf would be NaN), +inf to the top.
+    limites += "    " + nombre + " = mix(vec4(0.0), min(" + nombre + ", vec4(31.875, 31.875, 31.875, 1.0)), greaterThan(" +
+               nombre + ", vec4(0.0)));\n";
+  }
+  const size_t principal = glsl.find("\nvoid main()");
+  if (limites.empty() || principal == std::string::npos) {
+    return false;
+  }
+  glsl.replace(principal + 1, 11, "void xmow_main_sin_limite()");
+  glsl += "\nvoid main()\n{\n    xmow_main_sin_limite();\n" + limites + "}\n";
+  return true;
+}
+
+// xmow 1028: the renderer's order (ShaderDe's background and on-the-spot paths): early Z first, then the clamp.
+void AplicarVariantePs(std::string& glsl, uint32_t variante_ps) {
+  if (variante_ps & kVarianteZTemprana) DeclararZTemprana(glsl);
+  if (variante_ps & kVarianteLimite7e3Mascara)
+    DeclararLimite7e3(glsl, (variante_ps & kVarianteLimite7e3Mascara) >> kVarianteLimite7e3Desplazamiento);
+}
+
+// "1,208,209" (hex) -> values
+std::vector<uint32_t> ListaHex(const std::string& texto) {
+  std::vector<uint32_t> v;
+  size_t at = 0;
+  while (at < texto.size()) {
+    size_t fin = texto.find(',', at);
+    if (fin == std::string::npos) fin = texto.size();
+    const std::string t = texto.substr(at, fin - at);
+    if (!t.empty()) v.push_back(uint32_t(std::stoul(t, nullptr, 16)));
+    at = fin + 1;
+  }
+  return v;
 }
 
 std::vector<uint32_t> EspecializacionesPorDefecto(bool vertices) {
@@ -148,10 +215,10 @@ struct Compilado {
 };
 
 Compilado Compilar(const std::vector<uint32_t>& spirv, uint32_t especializacion, uint32_t salidas,
-                   const fs::path& archivo_glsl, bool z_temprana = false) {
+                   const fs::path& archivo_glsl, uint32_t variante_ps = 0) {
   Compilado c;
   rex::deko3d::GlslDeko g = rex::deko3d::SpirvAGlsl(spirv, especializacion, salidas);
-  if (z_temprana && !g.glsl.empty()) DeclararZTemprana(g.glsl);
+  if (variante_ps && !g.glsl.empty()) AplicarVariantePs(g.glsl, variante_ps);
   if (g.glsl.empty()) {
     c.motivo = "conversion: " + g.error;
     return c;
@@ -245,7 +312,7 @@ std::string ComprobarMascara(const std::vector<uint32_t>& spirv, uint32_t mascar
 // process when one variant passes the time limit (the child-process kill of the POSIX branch); the master restarts
 // the worker, which skips what the journal already has and records the variant it died on.
 struct TareaDisco {
-  uint32_t shader, especializacion, salidas, z_temprana, clave_esp, clave_var;
+  uint32_t shader, especializacion, salidas, variante_ps, clave_esp, clave_var;
 };
 struct RegistroDiario {
   uint32_t tag = 0, a = 0, b = 0;
@@ -383,7 +450,7 @@ int TrabajadorWin(const ds::BibliotecaShaders& biblioteca, const fs::path& dir, 
         std::snprintf(sufijo, sizeof(sufijo), "s%05u_%08X_%08X", td.shader, td.clave_esp, td.clave_var);
         glsl = carpeta_glsl / (std::string(sufijo) + (biblioteca.shaders()[td.shader].vertices ? ".vert" : ".frag"));
       }
-      c = Compilar(spirv, td.clave_esp, biblioteca.shaders()[td.shader].vertices ? td.salidas : ~0u, glsl, td.z_temprana != 0);
+      c = Compilar(spirv, td.clave_esp, biblioteca.shaders()[td.shader].vertices ? td.salidas : ~0u, glsl, td.variante_ps);
     }
     const uint32_t ms = uint32_t(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     {
@@ -475,11 +542,16 @@ int main(int argc, char** argv) try {
   if (argc < 3) {
     std::fprintf(stderr,
                  "uso: ds_dksh <gow2_shaders.dslib> <cache de salida> [--contenedores DIR]"
-                 " [--glsl DIR] [--informe FICHERO.tsv] [--variantes FICHERO] [--hilos N] [--limite SEGUNDOS]\n");
+                 " [--glsl DIR] [--informe FICHERO.tsv] [--variantes FICHERO] [--variantes-ps 1,208,209]"
+                 " [--espec-ps 0,...|todas] [--hilos N] [--limite SEGUNDOS]\n");
     return 1;
   }
   const fs::path biblioteca_ruta = argv[1], salida = argv[2];
   fs::path contenedores, carpeta_glsl, informe, variantes, diario;
+  // xmow 1028: pixel shader variants (hex, the renderer's variante_ps) made for every pixel shader at the
+  // specialization values of --espec-ps (hex list, default 0; "todas" = EspecializacionesPorDefecto).
+  std::vector<uint32_t> variantes_ps;
+  std::string espec_ps = "0";
   int trabajador = -1;           // Windows: this process is worker N of `hilos` (see TrabajadorWin)
   unsigned max_por_proceso = 400;  // Windows: a worker restarts itself after this many variants (uam leaks on failures)
   // Processes at once (default: every core) and the time one variant may take before it is killed.
@@ -491,6 +563,8 @@ int main(int argc, char** argv) try {
     else if (o == "--glsl") carpeta_glsl = argv[i + 1];
     else if (o == "--informe") informe = argv[i + 1];
     else if (o == "--variantes") variantes = argv[i + 1];
+    else if (o == "--variantes-ps") variantes_ps = ListaHex(argv[i + 1]);
+    else if (o == "--espec-ps") espec_ps = argv[i + 1];
     else if (o == "--diario") diario = argv[i + 1];
     else if (o == "--trabajador") trabajador = std::atoi(argv[i + 1]);
     else if (o == "--max-por-proceso") max_por_proceso = std::max(1, std::atoi(argv[i + 1]));
@@ -539,6 +613,23 @@ int main(int argc, char** argv) try {
       trabajo.push_back({i, e, ~0u});
       if (shaders[i].vertices) trabajo.push_back({i, e, 0});
     }
+  // xmow 1028: the runtime's pixel shader variants (early Z, 7e3 clamp), so the console finds them prebuilt.
+  if (!variantes_ps.empty()) {
+    const std::vector<uint32_t> especs = espec_ps == "todas" ? EspecializacionesPorDefecto(false) : ListaHex(espec_ps);
+    for (const uint32_t v : variantes_ps) {
+      if (!v || (v & ~kVariantesPsConocidas) || ((v & kVarianteLimite7e3Mascara) && (v & ~kVarianteLimite7e3Mascara &
+                                                                                       0xF00u) != kVarianteLimite7e3Revision))
+        throw std::runtime_error("--variantes-ps: variante no soportada (solo Z temprana y 7e3 revision 2)");
+    }
+    size_t antes = trabajo.size();
+    for (size_t i = 0; i < shaders.size(); ++i) {
+      if (shaders[i].vertices) continue;
+      for (const uint32_t e : especs)
+        for (const uint32_t v : variantes_ps) trabajo.push_back({i, e, ~0u, v});
+    }
+    std::printf("--variantes-ps: %zu variantes de pixel shader anadidas (%zu valores de especializacion)\n",
+                trabajo.size() - antes, especs.size());
+  }
   if (!carpeta_glsl.empty()) fs::create_directories(carpeta_glsl);
 
 #ifndef _WIN32
@@ -584,7 +675,7 @@ int main(int argc, char** argv) try {
       if (shaders[it->second].vertices)
         trabajo.push_back({it->second, espec, variante});
       else
-        trabajo.push_back({it->second, espec, ~0u, (variante & 1) != 0});
+        trabajo.push_back({it->second, espec, ~0u, variante & kVariantesPsConocidas});  // xmow 1028: the full variant
       ++anadidas;
     }
     std::printf("%zu variantes de %s (%zu de shaders que ya no estan)\n", anadidas, variantes.string().c_str(), sin_shader);
@@ -602,7 +693,7 @@ int main(int argc, char** argv) try {
       const auto& s = shaders[v.shader];
       const rex::deko3d::CacheDksh::Clave clave{rex::deko3d::HuellaSpirv(s.spirv),
                                                v.especializacion & mascaras[v.shader],
-                                               s.vertices ? v.salidas : (v.z_temprana ? 1u : 0u)};
+                                               s.vertices ? v.salidas : v.variante_ps};
       if (hechas.insert(clave).second) tareas.push_back({v, clave});
     }
   }
@@ -650,7 +741,7 @@ int main(int argc, char** argv) try {
     PonerU32(d, uint32_t(tareas.size()));
     for (const Tarea& t : tareas) {
       const bool vs = shaders[t.v.shader].vertices;
-      const TareaDisco td{uint32_t(t.v.shader), t.v.especializacion, vs ? t.v.salidas : ~0u, t.v.z_temprana ? 1u : 0u,
+      const TareaDisco td{uint32_t(t.v.shader), t.v.especializacion, vs ? t.v.salidas : ~0u, vs ? 0u : t.v.variante_ps,
                           t.clave.especializacion, t.clave.variante};
       d.append(reinterpret_cast<const char*>(&td), sizeof(td));
     }
@@ -730,7 +821,7 @@ int main(int argc, char** argv) try {
         close(tubo[0]);
         const auto& s = shaders[t.v.shader];
         const std::string d = Serializar(
-            Compilar(s.spirv, t.clave.especializacion, s.vertices ? t.v.salidas : ~0u, archivo_glsl(t), t.v.z_temprana));
+            Compilar(s.spirv, t.clave.especializacion, s.vertices ? t.v.salidas : ~0u, archivo_glsl(t), t.v.variante_ps));
         for (size_t at = 0; at < d.size();) {
           const ssize_t n = write(tubo[1], d.data() + at, d.size() - at);
           if (n <= 0) _exit(3);

@@ -29,6 +29,8 @@
 - **LoS1-nx** e **Budokai3-nx**. `tools/extract_iso.py` (extração XDVDFS) vem da árvore do LoS1-nx pelo Budokai3-nx. As
   primeiras builds (0.0.x) usavam o renderizador do Budokai3-nx; o atalho `L3 + R3` de captura e o `toolchain.cmake`
   vêm de lá. [LoS1-nx](https://github.com/FurryLilManChild/LoS1-nx) · [Budokai3-nx](https://github.com/ramonDias07/Budokai3-nx)
+  Desde a 0.1.34f o codegen usa o gerador do SDK do LoS1-nx (commit `3426a45`, BSD-3-Clause, [licença](../licenses/LoS1-nx-sdk-BSD.txt))
+  com `patches/los1-nx-generator.patch`, e `app/tools/xmow_diet_ops.h` vem do `diet_ops.h` dele (origem declarada no cabeçalho do arquivo: sa2-nx, sasrt-nx e banjo-nx).
 - **SPIRV-Cross**, **uam** (devkitPro e SwitchWakerHD), **xxHash**, **fmt** e **libmspack**, buscados pelo
   `tools/switch_setup.py` do SDK em commits fixos. [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) ·
   [uam](https://github.com/devkitPro/uam) · [SwitchWakerHD](https://github.com/centollOS/SwitchWakerHD)

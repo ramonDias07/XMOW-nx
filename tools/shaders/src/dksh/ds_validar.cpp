@@ -200,6 +200,32 @@ int main(int argc, char** argv) {
   std::printf("shaders con al menos un DKSH: %zu; sin ninguno: %zu; claves base ausentes: %zu; bytes que difieren entre lectura por indice y completa: %zu\n",
               con_dksh, sin_dksh, sin_base, difiere);
   if (difiere) fallo("lectura por indice y completa difieren");
+
+  // xmow 1028: the runtime's pixel shader variants (dibujos.cpp: early Z 0x001, 7e3 clamp of render target 0 with
+  // revision 2 = 0x208, both = 0x209) at specialization 0, under the key the renderer builds in ShaderDe:
+  // {HuellaSpirv(library SPIR-V), especializacion & MascaraEspecializacion, variante_ps}. Read back through the
+  // file index like the console (CacheDksh::CargarIndice + Buscar).
+  {
+    const uint32_t kVariantesPs[] = {0x001, 0x208, 0x209};
+    size_t presentes[3] = {}, total_ps = 0;
+    for (size_t i = 0; i < indice.shaders().size(); ++i) {
+      if (indice.shaders()[i].vertices) continue;
+      ++total_ps;
+      for (size_t v = 0; v < 3; ++v)
+        if (cache_indice.Buscar({huellas_spirv[i], 0u & mascaras[i], kVariantesPs[v]})) ++presentes[v];
+    }
+    std::printf("variantes de pixel shader del runtime (especializacion 0): 0x001 %zu/%zu, 0x208 %zu/%zu, 0x209 %zu/%zu\n",
+                presentes[0], total_ps, presentes[1], total_ps, presentes[2], total_ps);
+    // Shaders that missed in console test 29 (0.1.22, helicopter): their 0.1.23 keys, as the renderer logs them.
+    for (const size_t n : {size_t(9631), size_t(10074), size_t(12441), size_t(6770), size_t(4517)}) {
+      if (n >= indice.shaders().size() || indice.shaders()[n].vertices) continue;
+      for (const uint32_t v : kVariantesPs) {
+        const bool hay = cache_indice.Buscar({huellas_spirv[n], 0u & mascaras[n], v}) != nullptr;
+        std::printf("  PS n%zu 00000000 %08X (huella %016llX): %s\n", n, v, (unsigned long long)huellas_spirv[n],
+                    hay ? "en la cache" : "AUSENTE");
+      }
+    }
+  }
   if (argc > 3) {
     std::ofstream t(argv[3]);
     t << "tipo\tindice_en_biblioteca\n";

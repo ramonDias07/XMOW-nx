@@ -5,7 +5,7 @@
 // cooked packages, which the PC tools read offline; a shader the packages do not have (or one built at run time)
 // still goes through the XDK's xmow_D3DDevice_CreateVertexShader / xmow_D3DDevice_CreatePixelShader with its container
 // in guest memory (r3 = pFunction). Wrapping those two functions catches the shaders created this way (in Wolverine, 7 call sites; see below).
-// The two names come from app/codegen/names.toml; CMake compiles this file only when both are there.
+// The two names come from xmow-g2/codegen/names.toml; CMake compiles this file only when both are there.
 // Wolverine builds most shader objects by hand (memcpy of the container to +0x368 and XGRegister{Vertex,Pixel}Shader:
 // 82B31510 / 82B31228, fase2-viabilidade.md), so only 2+5 shaders go through these two functions; the library finds the
 // rest by the microcode fingerprint (gow2_shaders.h, steps 2-4). TODO: also hook XGRegister*Shader for step 1.

@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <rex/x360/shader_entry.h>
@@ -65,12 +66,34 @@ class Biblioteca {
 
   Estadisticas estadisticas() const;
 
+  // XMOW 0.1.27 (xmow_spirv_lectura_fondo): Identificar no longer reads a shader's SPIR-V from the card on the ring
+  // thread; the read goes to a reader thread of its own and the entry is handed out not ready. Until Lista says true,
+  // nothing that comes from the SPIR-V (spirv, samplers taken from it, kills, manual fetches) may be read: the draw is
+  // skipped, as a DKSH that is still being read. Any thread; a null entry is ready.
+  bool Lista(const rex::x360::EntradaShader* entrada) const;
+  // Per-map preload: the shaders read from the card while a map was current are saved in carpeta/<mapa>.spv, and when
+  // that map is loaded again its shaders are queued to the reader thread (behind the reads a draw is waiting for).
+  // Ring thread. mapa is a file name ("jungle1_p").
+  void CambioDeMapa(const std::string& mapa, const std::filesystem::path& carpeta);
+  // Accumulated, for [xmow hitch] and the 10 s report: ns the calling threads spent reading SPIR-V themselves (the
+  // ring with xmow_spirv_lectura_fondo off, the create hooks always), ns the reader thread spent, reads it did, of
+  // them preloads, and entries handed out not ready.
+  struct Lecturas {
+    uint64_t ns_en_el_acto = 0, ns_fondo = 0, fondo = 0, precargadas = 0, no_listas = 0;
+  };
+  Lecturas lecturas() const;
+
  private:
   const rex::x360::EntradaShader* IdentificarEntrada(bool vertices, uint32_t fisica,
                                                      std::span<const uint32_t> microcodigo);
   // With the library loaded as an index (every shader): reads the entry's SPIR-V from the card the first time it is
   // handed out and fills what comes from it (samplers' types, kills, manual fetches).
-  void Completar(const rex::x360::EntradaShader* entrada) const;
+  // 0.1.27: del_anillo (Identificar) queues the read to the reader thread with xmow_spirv_lectura_fondo.
+  void Completar(const rex::x360::EntradaShader* entrada, bool del_anillo) const;
+  // 0.1.27: the read itself (Completar, the reader thread). i = index in the entries.
+  void LeerEntrada(size_t i, bool fondo, bool precarga) const;
+  // 0.1.27: queues entry i to the reader thread (urgent: ahead of the preloads).
+  void Encolar(size_t i, bool urgente) const;
 
   struct Datos;
   std::unique_ptr<Datos> datos_;

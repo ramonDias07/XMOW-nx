@@ -1,0 +1,99 @@
+diff --git a/include/DXProgrammableCapture.h b/include/DXProgrammableCapture.h
+new file mode 100644
+index 0000000..3bd47b5
+--- /dev/null
++++ b/include/DXProgrammableCapture.h
+@@ -0,0 +1,20 @@
++#pragma once
++#ifndef BUDOKAI_DXPROGRAMMABLECAPTURE_COMPAT_H
++#define BUDOKAI_DXPROGRAMMABLECAPTURE_COMPAT_H
++
++#include <unknwn.h>
++
++// Compatibilidade com o header opcional de captura PIX do Windows SDK.
++// IID e vtable conforme a interface IDXGraphicsAnalysis documentada pela Microsoft.
++MIDL_INTERFACE("9f251514-9d4d-4902-9d60-18988ab7d4b5")
++IDXGraphicsAnalysis : public IUnknown {
++ public:
++  virtual void STDMETHODCALLTYPE BeginCapture() = 0;
++  virtual void STDMETHODCALLTYPE EndCapture() = 0;
++};
++
++#if defined(__MINGW32__) || defined(__MINGW64__)
++__CRT_UUID_DECL(IDXGraphicsAnalysis, 0x9f251514, 0x9d4d, 0x4902, 0x9d, 0x60, 0x18, 0x98, 0x8a, 0xb7, 0xd4, 0xb5)
++#endif
++
++#endif
+\ No newline at end of file
+diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
+index d876846..1b09204 100644
+--- a/include/rex/chrono/chrono.h
++++ b/include/rex/chrono/chrono.h
+@@ -116,7 +116,8 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
+ 
+ namespace std::chrono {
+ 
+-#ifdef __APPLE__
++#define REX_CHRONO_FORCE_CLOCK_CAST_FALLBACK 1  // XMOW: libc++ do llvm-mingw sem clock_time_conversion (como o host do Budokai)
++#if defined(__APPLE__) || defined(REX_CHRONO_FORCE_CLOCK_CAST_FALLBACK)
+ // Apple libc++ does not expose clock_time_conversion or clock_cast.
+ template <class, class>
+ struct clock_time_conversion {};
+diff --git a/src/core/threading_win.cpp b/src/core/threading_win.cpp
+index 896dfec..1458e56 100644
+--- a/src/core/threading_win.cpp
++++ b/src/core/threading_win.cpp
+@@ -48,6 +48,9 @@ struct THREADNAME_INFO {
+ #pragma pack(pop)
+ 
+ void raise_thread_name_exception(HANDLE thread, const std::string& name) {
++#if defined(__MINGW32__) || defined(__MINGW64__)  // XMOW: sem SEH MSVC no llvm-mingw (como o host do Budokai)
++  (void)thread; (void)name; return;
++#else
+   if (!IsDebuggerPresent()) {
+     return;
+   }
+@@ -61,6 +64,7 @@ void raise_thread_name_exception(HANDLE thread, const std::string& name) {
+                    reinterpret_cast<ULONG_PTR*>(&info));
+   } __except (EXCEPTION_EXECUTE_HANDLER) {  // NOLINT
+   }
++#endif
+ }
+ 
+ static void set_thread_name_impl(HANDLE thread, const std::string_view name) {
+diff --git a/src/input/xinput/xinput_input_driver.cpp b/src/input/xinput/xinput_input_driver.cpp
+index a6a1da9..4523550 100644
+--- a/src/input/xinput/xinput_input_driver.cpp
++++ b/src/input/xinput/xinput_input_driver.cpp
+@@ -115,12 +115,12 @@ X_STATUS XinputInputDriver::Setup() {
+   }
+ 
+   module_ = module;
+-  XInputGetCapabilities_ = xigc;
+-  XInputGetState_ = xigs;
+-  XInputGetStateEx_ = xigsEx;
+-  XInputGetKeystroke_ = xigk;
+-  XInputSetState_ = xiss;
+-  XInputEnable_ = xie;
++  XInputGetCapabilities_ = reinterpret_cast<void*>(xigc);  // XMOW: FARPROC -> void* (llvm-mingw)
++  XInputGetState_ = reinterpret_cast<void*>(xigs);  // XMOW: FARPROC -> void* (llvm-mingw)
++  XInputGetStateEx_ = reinterpret_cast<void*>(xigsEx);  // XMOW: FARPROC -> void* (llvm-mingw)
++  XInputGetKeystroke_ = reinterpret_cast<void*>(xigk);  // XMOW: FARPROC -> void* (llvm-mingw)
++  XInputSetState_ = reinterpret_cast<void*>(xiss);  // XMOW: FARPROC -> void* (llvm-mingw)
++  XInputEnable_ = reinterpret_cast<void*>(xie);  // XMOW: FARPROC -> void* (llvm-mingw)
+ 
+   return X_STATUS_SUCCESS;
+ }
+diff --git a/src/ui/d3d12/d3d12_provider.cpp b/src/ui/d3d12/d3d12_provider.cpp
+index bf8252b..5684023 100644
+--- a/src/ui/d3d12/d3d12_provider.cpp
++++ b/src/ui/d3d12/d3d12_provider.cpp
+@@ -256,7 +256,7 @@ bool D3D12Provider::Initialize() {
+   while (dxgi_factory->EnumAdapters1(adapter_index, &adapter) == S_OK) {
+     DXGI_ADAPTER_DESC1 adapter_desc;
+     if (SUCCEEDED(adapter->GetDesc1(&adapter_desc))) {
+-      if (SUCCEEDED(pfn_d3d12_create_device_(adapter, D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device),
++      if (SUCCEEDED(pfn_d3d12_create_device_(adapter, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device),
+                                              nullptr))) {
+         if (REXCVAR_GET(d3d12_adapter) >= 0) {
+           if (adapter_index == REXCVAR_GET(d3d12_adapter)) {

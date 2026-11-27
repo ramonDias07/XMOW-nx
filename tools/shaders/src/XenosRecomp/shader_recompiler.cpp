@@ -451,8 +451,13 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         SCALAR_CONSTANT_1
     };
 
+    // XMOW 0.1.23: set by each op() call: the operand is one of the shader's own literals and every component it uses is
+    // finite and non-zero (a multiply by it needs no Xenos zero rule).
+    bool literalSeguro = false;
+
     auto op = [&](size_t operand)
         {
+            literalSeguro = false;
             size_t reg = 0;
             size_t swizzle = 0;
             bool select = true;
@@ -575,6 +580,10 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             result += regFormatted;
             result += '.';
 
+            // The register components the operand uses, in order (for literalSeguro).
+            uint32_t componentes[4] = {};
+            uint32_t nComponentes = 0;
+
             switch (operand)
             {
             case VECTOR_0:
@@ -606,7 +615,10 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                 for (size_t i = 0; i < 4; i++)
                 {
                     if ((mask >> i) & 0x1)
+                    {
+                        componentes[nComponentes++] = ((swizzle >> (i * 2)) + i) & 0x3;
                         result += SWIZZLES[((swizzle >> (i * 2)) + i) & 0x3];
+                    }
                 }
 
                 break;
@@ -614,13 +626,31 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
 
             case SCALAR_0:
             case SCALAR_CONSTANT_0:
+                componentes[nComponentes++] = ((swizzle >> 6) + 3) & 0x3;
                 result += SWIZZLES[((swizzle >> 6) + 3) & 0x3];
                 break;
 
             case SCALAR_1:
             case SCALAR_CONSTANT_1:
+                componentes[nComponentes++] = swizzle & 0x3;
                 result += SWIZZLES[swizzle & 0x3];
                 break;
+            }
+
+            if (!select && regFormatted == fmt::format("c{}", reg))
+            {
+                auto literal = valoresLiterales.find(uint32_t(reg));
+                if (literal != valoresLiterales.end() && nComponentes != 0)
+                {
+                    literalSeguro = true;
+                    for (uint32_t i = 0; i < nComponentes; i++)
+                    {
+                        // Zero or denormal (exponent 0), or infinity / NaN (exponent 255): the rule may matter.
+                        const uint32_t exponente = (literal->second[componentes[i]] >> 23) & 0xFF;
+                        if (exponente == 0 || exponente == 0xFF)
+                            literalSeguro = false;
+                    }
+                }
             }
 
             if (abs)
@@ -763,9 +793,19 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             print("{} + {}", op(VECTOR_0), op(VECTOR_1));
             break;
 
+        // XMOW 0.1.23: the Xenos zero rule (xeMul, shader_common.h) unless the operands are the same or one is a safe
+        // literal (Xenia's spirv_translator_alu.cpp kMul/kMad: only for the components whose operands differ).
         case AluVectorOpcode::Mul:
-            print("{} * {}", op(VECTOR_0), op(VECTOR_1));
+        {
+            const std::string a = op(VECTOR_0);
+            const bool seguroA = literalSeguro;
+            const std::string b = op(VECTOR_1);
+            if (!multiplicacionXenos || a == b || seguroA || literalSeguro)
+                print("{} * {}", a, b);
+            else
+                print("xeMul({}, {})", a, b);
             break;
+        }
 
         /*
          * The Xenos MOV is a max with itself.
@@ -822,8 +862,18 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             break;
 
         case AluVectorOpcode::Mad:
-            print("{} * {} + {}", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+        {
+            const std::string a = op(VECTOR_0);
+            const bool seguroA = literalSeguro;
+            const std::string b = op(VECTOR_1);
+            const bool seguroB = literalSeguro;
+            const std::string c = op(VECTOR_2);
+            if (!multiplicacionXenos || a == b || seguroA || seguroB)
+                print("{} * {} + {}", a, b, c);
+            else
+                print("xeMad({}, {}, {})", a, b, c);
             break;
+        }
 
         case AluVectorOpcode::CndEq:
             print("select({} == 0.0, {}, {})", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
@@ -839,12 +889,16 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
 
         case AluVectorOpcode::Dp4:
         case AluVectorOpcode::Dp3:
-            print("dot({}, {})", op(VECTOR_0), op(VECTOR_1));
-            break;
-
         case AluVectorOpcode::Dp2Add:
-            print("dot({}, {}) + {}", op(VECTOR_0), op(VECTOR_1), op(VECTOR_2));
+        {
+            const std::string a = op(VECTOR_0);
+            const bool seguroA = literalSeguro;
+            const std::string b = op(VECTOR_1);
+            print("{}({}, {})", !multiplicacionXenos || a == b || seguroA || literalSeguro ? "dot" : "xeDot", a, b);
+            if (instr.vectorOpcode == AluVectorOpcode::Dp2Add)
+                print(" + {}", op(VECTOR_2));
             break;
+        }
 
         case AluVectorOpcode::Cube:
             print("cube(r{}, cubeMapData)", instr.src1Register);
@@ -948,13 +1002,31 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             print("{} + ps", op(SCALAR_0));
             break;
 
+        // XMOW 0.1.23: the zero rule as in the vector multiplies (Xenia's kMuls, kMulsPrev, kMulsPrev2).
         case AluScalarOpcode::Muls:
-            print("{} * {}", op(SCALAR_0), op(SCALAR_1));
+        {
+            const std::string a = op(SCALAR_0);
+            const bool seguroA = literalSeguro;
+            const std::string b = op(SCALAR_1);
+            if (!multiplicacionXenos || a == b || seguroA || literalSeguro)
+                print("{} * {}", a, b);
+            else
+                print("xeMul({}, {})", a, b);
             break;
+        }
 
         case AluScalarOpcode::MulsPrev:
+        {
+            const std::string a = op(SCALAR_0);
+            if (!multiplicacionXenos || literalSeguro)
+                print("{} * ps", a);
+            else
+                print("xeMul({}, ps)", a);
+            break;
+        }
+
         case AluScalarOpcode::MulsPrev2:
-            print("{} * ps", op(SCALAR_0));
+            print("xeMulsPrev2({}, {}, ps)", op(SCALAR_0), op(SCALAR_1));
             break;
 
         // Same as above, for the scalar channel: MAXs dst, src, src is the Xenos MOV.
@@ -1004,21 +1076,51 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             print("exp2({})", op(SCALAR_0));
             break;
 
-        case AluScalarOpcode::Logc:
+        /*
+         * XMOW 0.1.23: Xenia's semantics (spirv_translator_alu.cpp kLog/kLogc, kRcp/kRcpc/kRcpf, kRsq/kRsqc/kRsqf). Before,
+         * all nine were clamp(x, FLT_MIN, FLT_MAX) with FLT_MIN = -FLT_MAX: rcpf and rsqf of 0 gave FLT_MAX instead of 0
+         * (a normalize of a zero vector became a huge value). The plain forms keep the clamp unless multiplicacionXenos
+         * (shader_recompiler.h): with IEEE multiplies, a finite FLT_MAX keeps 0 * rcp(0) at 0, as the Xenos rule does.
+         */
         case AluScalarOpcode::Log:
-            print("clamp(log2({}), FLT_MIN, FLT_MAX)", op(SCALAR_0));
+            if (multiplicacionXenos)
+                print("log2({})", op(SCALAR_0));
+            else
+                print("clamp(log2({}), FLT_MIN, FLT_MAX)", op(SCALAR_0));  // FLT_MIN is -FLT_MAX (shader_common.h)
+            break;
+
+        case AluScalarOpcode::Logc:
+            print("xeLogc({})", op(SCALAR_0));
+            break;
+
+        case AluScalarOpcode::Rcp:
+            if (multiplicacionXenos)
+                print("1.0 / {}", op(SCALAR_0));
+            else
+                print("clamp(rcp({}), FLT_MIN, FLT_MAX)", op(SCALAR_0));  // FLT_MIN is -FLT_MAX (shader_common.h)
             break;
 
         case AluScalarOpcode::Rcpc:
+            print("xeRcpc({})", op(SCALAR_0));
+            break;
+
         case AluScalarOpcode::Rcpf:
-        case AluScalarOpcode::Rcp:
-            print("clamp(rcp({}), FLT_MIN, FLT_MAX)", op(SCALAR_0));
+            print("xeRcpf({})", op(SCALAR_0));
+            break;
+
+        case AluScalarOpcode::Rsq:
+            if (multiplicacionXenos)
+                print("rsqrt({})", op(SCALAR_0));
+            else
+                print("clamp(rsqrt({}), FLT_MIN, FLT_MAX)", op(SCALAR_0));  // FLT_MIN is -FLT_MAX (shader_common.h)
             break;
 
         case AluScalarOpcode::Rsqc:
+            print("xeRsqc({})", op(SCALAR_0));
+            break;
+
         case AluScalarOpcode::Rsqf:
-        case AluScalarOpcode::Rsq:
-            print("clamp(rsqrt({}), FLT_MIN, FLT_MAX)", op(SCALAR_0));
+            print("xeRsqf({})", op(SCALAR_0));
             break;
 
         case AluScalarOpcode::Subs:
@@ -1080,8 +1182,16 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
 
         case AluScalarOpcode::Mulsc0:
         case AluScalarOpcode::Mulsc1:
-            print("{} * {}", op(SCALAR_CONSTANT_0), op(SCALAR_CONSTANT_1));
+        {
+            const std::string a = op(SCALAR_CONSTANT_0);
+            const bool seguroA = literalSeguro;
+            const std::string b = op(SCALAR_CONSTANT_1);
+            if (!multiplicacionXenos || a == b || seguroA || literalSeguro)
+                print("{} * {}", a, b);
+            else
+                print("xeMul({}, {})", a, b);
             break;
+        }
 
         case AluScalarOpcode::Addsc0:
         case AluScalarOpcode::Addsc1:
@@ -1518,6 +1628,8 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
             {
                 println("\tfloat4 c{} = asfloat(uint4(0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}));",
                     definition->registerIndex + i - (isPixelShader ? 256 : 0), value[0].get(), value[1].get(), value[2].get(), value[3].get());
+                valoresLiterales[definition->registerIndex + i - (isPixelShader ? 256 : 0)] =
+                    { value[0].get(), value[1].get(), value[2].get(), value[3].get() };
 
                 value += 4;
             }
@@ -1983,6 +2095,19 @@ void ShaderRecompiler::recompile(const uint8_t* shaderData, const std::string_vi
                     indent();
                     out += "}";
 
+                    // XMOW 0.1.23: RB_COLOR_INFO color_exp_bias, after the alpha test (which needs the unbiased alpha),
+                    // as Xenia's CompletePixelShader_WriteToRTVs (dxbc_translator_om.cpp): every color output times
+                    // 2^bias of its render target (g_ColorExpBias, shader_common.h).
+                    static const uint32_t kSalidasColor[4] = { PIXEL_SHADER_OUTPUT_COLOR0, PIXEL_SHADER_OUTPUT_COLOR1,
+                        PIXEL_SHADER_OUTPUT_COLOR2, PIXEL_SHADER_OUTPUT_COLOR3 };
+                    for (uint32_t i = 0; i < 4; i++)
+                    {
+                        if (reinterpret_cast<const PixelShader*>(shader)->outputs & kSalidasColor[i])
+                        {
+                            indent();
+                            println("oC{0} *= g_ColorExpBias({0});", i);
+                        }
+                    }
                 }
                 else
                 {

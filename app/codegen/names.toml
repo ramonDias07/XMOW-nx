@@ -4,7 +4,7 @@
 # funcao do jogo virar o stub.
 #
 # XDK Direct3D (src/gow2_shader_dump.cpp; o CMake so compila esses hooks quando os dois nomes estao aqui).
-# Fonte: trabalho\fase2-viabilidade.md, secao 3 (d3d_match.py com o LoS como referencia): as duas com score 1,00, confianca A
+# Fonte: (d3d_match.py com o LoS como referencia): as duas com score 1,00, confianca A
 # (margem sobre o 2o lugar). Sitios de chamada: CreateVertexShader 2 (8236D680, 82373910), CreatePixelShader 5 (as mesmas
 # duas funcoes). A UE3 monta a maioria dos objetos de shader a mao + XGRegister*Shader (82B31510 VS / 82B31228 PS, tambem A).
 [entrypoint.functions.0x82B31608]

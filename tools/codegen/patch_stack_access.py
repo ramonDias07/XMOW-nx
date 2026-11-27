@@ -13,8 +13,10 @@ Usage: patch_stack_access.py generated/default/*.cpp   (idempotent)
 import re
 import sys
 
-STACK = re.compile(r"\bREX_(LOAD|STORE)_U(8|16|32|64)\(ctx\.r1\.u32\b")
-HELPER_R12 = re.compile(r"\bREX_(LOAD|STORE)_U(8|16|32|64)\(ctx\.r12\.u32\b")
+# lote C: tambem as formas D do dform_disp_split, REX_LOAD_D_U32(ctx.r1.u32, -8) -> REX_SLOAD_D_U32(ctx.r1.u32, -8)
+# (macros REX_SLOAD_D_*/REX_SSTORE_D_* no make_nx_pch.py, ponto 6).
+STACK = re.compile(r"\bREX_(LOAD|STORE)_((?:D_)?U(?:8|16|32|64))\(ctx\.r1\.u32\b")
+HELPER_R12 = re.compile(r"\bREX_(LOAD|STORE)_((?:D_)?U(?:8|16|32|64))\(ctx\.r12\.u32\b")
 HELPER = re.compile(r"^DEFINE_REX_FUNC\(__(save|rest)(fpr|vmx)_\d+\)")
 
 
@@ -26,9 +28,9 @@ def patch(path):
     for i, line in enumerate(lines):
         if line.startswith("DEFINE_REX_FUNC("):
             in_helper = bool(HELPER.match(line))
-        new, n = STACK.subn(r"REX_S\1_U\2(ctx.r1.u32", line)
+        new, n = STACK.subn(r"REX_S\1_\2(ctx.r1.u32", line)
         if in_helper:
-            new, m = HELPER_R12.subn(r"REX_S\1_U\2(ctx.r12.u32", new)
+            new, m = HELPER_R12.subn(r"REX_S\1_\2(ctx.r12.u32", new)
             n += m
         if n:
             lines[i] = new

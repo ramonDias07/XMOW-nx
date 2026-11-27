@@ -3,6 +3,7 @@
 #include "shader.h"
 #include "shader_code.h"
 
+#include <array>
 #include <deque>
 #include <unordered_set>
 
@@ -44,6 +45,14 @@ struct ShaderRecompiler : StringBuffer
     bool sinTabla = false;
     std::unordered_map<uint32_t, uint32_t> samplersSinTabla;
     std::unordered_set<uint32_t> literalesSinTabla;
+    // XMOW 0.1.23: the values of the literals the shader defines (register -> 4 words), so a multiply by a literal that
+    // is finite and non-zero in every component it uses skips the Xenos zero rule (IEEE gives the same value there).
+    std::unordered_map<uint32_t, std::array<uint32_t, 4>> valoresLiterales;
+    // XMOW 0.1.23: the Xenos multiply zero rule (xeMul/xeMad/xeDot) and plain IEEE rcp/rsq/log, as Xenia. Off (ds_hlsl:
+    // DS_MULTIPLICACION_XENOS=1 turns it on): multiplies are IEEE and rcp/rsq/log stay clamped to +-FLT_MAX, so 0 times
+    // their result is still 0 (the common case the rule exists for) at no ALU cost; rcpc/rsqc/logc/rcpf/rsqf and
+    // mulsprev2 follow Xenia either way.
+    bool multiplicacionXenos = false;
     std::deque<std::string> nombresSinTabla;
     bool usaTfetchVertice = false;
     // A vertex fetch at a computed index (dsVfetch), and each element's position in the declaration by address.

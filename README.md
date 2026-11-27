@@ -5,25 +5,58 @@ Xbox 360. O ReXGlue recompila o código PowerPC do jogo para ARM64. A camada do 
 [gears2-nx](https://github.com/VasilkovND/gears2-nx): ela processa os comandos gráficos Xenos e desenha com Deko3D a
 partir dos shaders traduzidos do próprio jogo.
 
-> [!WARNING]
-> **Em desenvolvimento: ainda não é jogável.** O jogo chega ao gameplay no console com o quadro inteiro, mas ainda há
-> defeitos de imagem (névoa e clarão) e roda a 15–28 FPS. A release v0.1.16 é só código-fonte, para quem quer compilar e
-> testar. [Estado e histórico dos testes](docs/estado.md)
+> [!NOTE]
+> **Release 0.1.34f: NRO pronto + instalador para Windows.** Não precisa compilar nem instalar Python. O instalador
+> gera os arquivos do jogo e os shaders a partir do seu próprio disco. Veja [Instalar](#instalar) e
+> [Reportar bugs](#reportar-bugs).
 
-[Estado atual](docs/estado.md) · [Como compilar](docs/build.md) · [Capturas](#capturas-no-switch) · [Referências](docs/referencias.md) · [English overview](#english-overview)
+[Instalar](#instalar) · [Reportar bugs](#reportar-bugs) · [Estado atual](docs/estado.md) · [Como compilar](docs/build.md) · [Capturas](#capturas-no-switch) · [Referências](docs/referencias.md) · [English overview](#english-overview)
+
+## Instalar
+
+Na [release v0.1.34f](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.34f) há dois arquivos:
+`XMOW-nx-v0.1.34f.zip` (NRO, `xmow.toml` e LEIA-ME) e `XMOW-nx-installer-v0.1.34f.zip` (instalador). O jogo não vem
+incluído.
+
+1. Extraia o instalador e rode `xmow_setup.exe` (Windows). Informe o seu `.iso` do disco de Xbox 360 (**Uncaged
+   Edition**, sem title update) ou a pasta do disco já extraído, e uma pasta de saída. Ele extrai o jogo para
+   `switch\XMOW\game_root` e gera os 4 arquivos de shader a partir do seu disco, conferindo cada um. Leva de 30 a 45
+   minutos e precisa de uns 10 GB livres no PC. Nada é enviado para fora.
+2. Copie para a raiz do cartão SD a pasta `switch` do `XMOW-nx-v0.1.34f.zip` e a pasta `switch` que o instalador criou.
+   As duas vão para `/switch/XMOW/`.
+3. Abra por um forwarder NSP (ou pelo Homebrew Menu em modo aplicativo): o port precisa da memória inteira de
+   aplicativo.
+O idioma segue o do console, como no Xbox 360 (o disco tem inglês, francês, espanhol e italiano; os outros ficam em
+inglês). Menu rápido > LANGUAGE escolhe outro, depois de reiniciar o jogo.
+
+## Reportar bugs
+
+Bugs podem aparecer. Se achar um, abra uma [issue](https://github.com/ramonDias07/XMOW-nx/issues/new/choose) com o
+seguinte, que é o que precisamos para corrigir:
+
+1. Ligue o log: `L + R + →` > **LOGS AND DIAGNOSTICS** > **LOG LEVEL: INFO** (salve).
+2. Repita o erro. Se for um problema de imagem, aperte `L3 + R3` na cena com o defeito.
+3. Saia do jogo e pegue a pasta `/switch/XMOW/logs/` e o seu `xmow.toml`. Se o console inteiro travou ou mostrou uma tela
+   de erro do Atmosphère, pegue também os arquivos com a data do erro em `/atmosphere/crash_reports/` e
+   `/atmosphere/fatal_reports/`.
+4. Na issue, diga a versão, a cena, o que aconteceu e o que você esperava, e anexe tudo num `.zip` (com uma foto ou
+   captura da tela, se ajudar).
+
+Depois, volte o LOG LEVEL para OFF para não perder desempenho.
 
 ## Estado do port
 
-Build atual: **0.1.16** ([release](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.16), só código-fonte).
+Build atual: **0.1.34f** ([release](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.34f), testada no Switch
+físico). Mudanças desde a 0.1.16 em [release-v0.1.34f.md](docs/release-v0.1.34f.md).
 
 | Área | Estado |
 | --- | --- |
-| Switch físico | Testadas no console até a 0.1.13: logos e vídeos Bink com áudio, menus com imagem 3D, cutscenes e o gameplay da primeira fase com HUD e quadro inteiro. **Ainda não testadas:** a 0.1.14 a 0.1.16 (menu novo e ajustes de desempenho). |
-| Imagem | A tela dividida (0.1.9) e as manchas brancas (0.1.10) foram resolvidas. Falta a névoa de altura, omitida por enquanto, e o clarão na abertura da fase. |
-| Desempenho | 15 a 28 FPS no gameplay, com a GPU entre 35 e 70 ms por quadro (0.1.12). A 0.1.16 traz os primeiros ajustes, ainda sem teste. |
-| Shaders | 16.457 shaders do jogo traduzidos (2.127 VS, 14.316 PS e variantes), com cache DKSH lido do SD sob demanda. |
+| Switch físico | A primeira fase é jogável do começo ao fim, com HUD, cutscenes, áudio e menus. |
+| Desempenho | Cerca de 20 a 30 FPS com as configurações da release (resolução interna 75 %, GPU boost oficial). |
+| Idioma | Segue o do console (inglês, francês, espanhol ou italiano); menu rápido > LANGUAGE escolhe outro. |
+| Problema conhecido | Com LIGHTING NONE, o menu principal fica escuro ao voltar do gameplay, até a próxima fase carregar. |
 
-## O que você precisa
+## Compilar do código-fonte (opcional)
 
 - Um dump `.iso` próprio do disco **X-Men Origins: Wolverine – Uncaged Edition (USA, Europe)** de Xbox 360, sem title
   update. O arquivo de entrada é `default.xex` com SHA-256
@@ -103,22 +136,34 @@ Veja de onde veio cada parte e o que é deste port em [Referências](docs/refere
 
 **XMOW-nx** is an unofficial Nintendo Switch homebrew port of **X-Men Origins: Wolverine – Uncaged Edition** from
 Xbox 360. It uses ReXGlue for static recompilation and the app layer and Deko3D renderer of
-[gears2-nx](https://github.com/VasilkovND/gears2-nx). **It is a work in progress and not playable yet.** Up to
-build 0.1.13 it was tested on a physical Switch: logos, Bink videos with audio, 3D menus, cutscenes and the first level
-with HUD and the full frame, at 15–28 FPS. The height fog is still skipped and the level intro has a bright glare.
-Builds 0.1.14–0.1.16 (new menu, first performance work) are not tested yet. Release
-[v0.1.16](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.16) is source code only.
+[gears2-nx](https://github.com/VasilkovND/gears2-nx).
 
-Build from source with your own **Uncaged Edition (USA, Europe) Xbox 360 ISO**, no title update. The build tools
-(Windows PowerShell for now) generate the code, the shaders and the NRO locally. Hardware test reports and rendering
-fixes are welcome in English or Portuguese. [Build guide in Portuguese](docs/build.md) · [Test history](docs/estado.md) ·
-[Issues](https://github.com/ramonDias07/XMOW-nx/issues)
+**Install (release v0.1.34f: ready NRO + Windows installer, no building, no Python):** the
+[release](https://github.com/ramonDias07/XMOW-nx/releases/tag/v0.1.34f) has `XMOW-nx-v0.1.34f.zip` (NRO, `xmow.toml`,
+readme) and `XMOW-nx-installer-v0.1.34f.zip`. The game is not included.
+1. Extract the installer and run `xmow_setup.exe`. Give it your own Xbox 360 `.iso` (**Uncaged Edition**, no title
+   update) or the extracted disc folder, and an output folder. It extracts the game to `switch\XMOW\game_root` and builds
+   the 4 shader files from your disc, checking each one. It takes 30–45 minutes and about 10 GB free; nothing is uploaded.
+2. Copy the `switch` folder from `XMOW-nx-v0.1.34f.zip` and the `switch` folder the installer made to the root of your SD
+   card. Both go to `/switch/XMOW/`.
+3. Open it through an NSP forwarder (or the Homebrew Menu in application mode): it needs the full application memory.
+
+The game follows the console language (English, French, Spanish or Italian; anything else plays in English). Quick menu
+(`+` and `−` together) > LANGUAGE picks another one after a restart.
+
+**Reporting bugs:** bugs can show up. Please open an [issue](https://github.com/ramonDias07/XMOW-nx/issues/new/choose):
+turn the log on (`L + R + →` > LOGS AND DIAGNOSTICS > LOG LEVEL: INFO), repeat the problem (press `L3 + R3` on a visual
+glitch), then attach a `.zip` with `/switch/XMOW/logs/`, your `xmow.toml` and, if the whole console crashed, the files
+from that time in `/atmosphere/crash_reports/` and `/atmosphere/fatal_reports/`. Say the version, the scene and what
+happened. Set LOG LEVEL back to OFF afterwards.
+
+Building from source is still possible: [build guide in Portuguese](docs/build.md) · [Test history](docs/estado.md)
 
 **Original game and legal notice.** *X-Men Origins: Wolverine* was developed by **Raven Software** and published by
 **Activision**. Wolverine and the X-Men are **Marvel** characters. Unreal Engine is a trademark of **Epic Games**. This is
 a non-commercial fan project. It is **not affiliated with or endorsed by** Activision, Raven Software, Marvel, Disney,
-Epic Games, Microsoft or Nintendo. This repository contains no game code or assets. You must own the original disc and
-make your own dump. Rights holders with a concern can open an issue, and the material will be reviewed or removed
+Epic Games, Microsoft or Nintendo. No game files, shaders or keys are distributed: the installer makes them from your
+own disc. You must own the original disc and make your own dump. Rights holders with a concern can open an issue, and the material will be reviewed or removed
 promptly.
 
 ## Aviso legal
@@ -130,9 +175,9 @@ Activision, Raven Software, Marvel, Disney, Epic Games, Microsoft ou Nintendo.
   *Unreal Engine* é marca da Epic Games.
 - *Xbox 360* é marca da Microsoft Corporation e *Nintendo Switch* é marca da Nintendo. Os nomes aparecem aqui só para
   indicar compatibilidade.
-- Este repositório **não distribui** o jogo, seus executáveis, arquivos de dados, áudio, vídeo, texturas, shaders,
-  código recompilado nem chaves. Para compilar, é preciso um disco original adquirido legalmente e um dump feito pela
-  própria pessoa. Não peça nem compartilhe ISOs ou NROs que contenham dados do jogo.
+- Este projeto **não distribui** o jogo, seus arquivos de dados, áudio, vídeo, texturas, shaders nem chaves. O
+  instalador gera os arquivos do jogo e os shaders a partir de um disco original adquirido legalmente e de um dump feito
+  pela própria pessoa. Não peça nem compartilhe ISOs nem arquivos do jogo.
 - Titulares de direitos com alguma objeção podem abrir uma [issue](https://github.com/ramonDias07/XMOW-nx/issues). O
   material será revisto ou removido prontamente.
 
@@ -140,5 +185,6 @@ Activision, Raven Software, Marvel, Disney, Epic Games, Microsoft ou Nintendo.
 
 O código deste port segue a GPL-3.0, a mesma do gears2-nx. Os componentes de terceiros mantêm suas licenças em
 [`licenses/`](licenses/) e nas próprias árvores. A GPL-3.0 vale apenas para o código deste repositório e não cobre o
-jogo original nem os dados extraídos dele. O dump, os executáveis do jogo, a recompilação gerada, os shaders e caches
-derivados, os saves e os NROs gerados ficam no computador de quem compila.
+jogo original nem os dados extraídos dele. O dump, os arquivos do jogo, os shaders e caches derivados e os saves ficam
+no computador e no cartão de quem instala. O instalador (`tools/installer/`) também é GPL-3.0, e as licenças das
+ferramentas que ele embute estão no próprio pacote.

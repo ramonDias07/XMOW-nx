@@ -1,41 +1,87 @@
-# X-Men Origins: Wolverine (ReXGlue + deko3d, app layer from gears2-nx) 0.1.16. Goes next to XMOW.nro (SD: /switch/XMOW).
+# X-Men Origins: Wolverine (ReXGlue + deko3d, app layer from gears2-nx) 0.1.34. Goes next to XMOW.nro (SD: /switch/XMOW).
 # Keys are the gears2-nx gow2.toml ones (cvar names kept: gow2_*); texts are comments only. Every key below can be
 # removed: the value shown is the default unless it says otherwise ("diag" = turned on only in the diagnostic block at the end).
 # Open it through the NSP forwarder (it runs as an application, with the full memory).
 #
 # Files beside the NRO: xmow.toml (this), xmow_shaders.dslib + shadercache_dksh.bin (shader library and DKSH cache),
 # game_root/ (the extracted disc: default.xex and WGame/), cache/ (cache: for the game), logs/ (xmow_NNN.log, logs/rex/),
-# xmow_resolucion.txt (written by the menu), telemetria.flag (turns the telemetry below on), sin_resplandor.flag (no use here).
-# Controls (modelo-menu-port standard):
-#   + and - together : quick menu (internal resolution (fixed 1280X720), output resolution, official GPU boost, height fog,
-#                      FPS counter, mute audio, save and close, restore defaults).
+# telemetria.flag (turns the telemetry below on), sin_resplandor.flag (no use here).
+# Controls (shared menu template):
+#   + and - together : quick menu (internal resolution, shadows, output resolution, official GPU boost, view distance, small objects, lighting,
+#                      height fog, FPS counter, mute audio, save and close, restore defaults).
 #   L + R + Right    : advanced settings (graphics, frame pacing, deko rendering, GPU and cache, audio, controls, port fixes, logs).
 #   Changes made in the menu are written into this file by SAVE (only the menu's keys; comments are kept).
-#   L3 + R3          : capture for diagnosis: dump of the next frame (every resolved texture as BMP in volcado_NN/)
-#                      + full draw trace in the log
+#   L3 + R3          : screen capture of the presented frame (capturas/cap_NNN.bmp). With xmow_l3r3_volcado_completo = true
+#                      also the diagnostic dump of the next frame (every resolved texture as BMP in volcado_NN/) + full draw trace
 # The gears2-nx ZL + ZR shortcuts are all off (switch_atajos_depuracion and switch_atajo_contador_fps = false).
 
 # ---- Logs ----
-# ZL + ZR shortcuts of the SDK off (modelo-menu-port standard: only + -, and L3 + R3)
+# ZL + ZR shortcuts of the SDK off (shared menu template: only + -, and L3 + R3)
 switch_atajos_depuracion = false
 switch_atajo_contador_fps = false
 # The log always goes to /switch/XMOW/logs (xmow_NNN.log); there is no key for it.
 log_level = "info"
+# 0.1.34: PLAY MODE. true (the default) = normal play: the log keeps WARN and ERROR lines, map loads and menu changes
+# (a crash still writes rex_crash.log and the queued log lines); the 10 s reports, the profile report, the slow frame
+# lines and stack sampling are off; one [xmow live] line a minute (frame times, memory). false = full diagnostics
+# (log_level applies), as for the console tests. Menu: LOGS AND DIAGNOSTICS > PLAY MODE; the TESTS page
+# (xmow_bench.toml) turns diagnostics on by itself.
+xmow_modo_jogo = false
+# 0.1.25: the log is written by a thread of its own, so the GPU ring thread never waits for the SD card (the 2-6 s
+# freezes of tests 31 and 32). A full queue drops lines instead of waiting; the 10 s report counts them.
+# false = synchronous, as before (only to hunt a crash: the last ~200 ms of lines can be lost with true).
+log_async = true
 
 # ---- Presentation ----
 video_mode_width = 1280
 video_mode_height = 720
 vsync = true
-# xmow_resolucao_saida = 1080   # output height: docked 1080/900/720/540, handheld 720/540/360
+# xmow_resolucao_saida = 1080   # output height (the swapchain), live from the menu: docked 1080/900/720/612/540/480/360,
+#                                handheld 720/612/540/480/360 (1920x1080, 1600x900, 1280x720, 1088x612, 960x540, 854x480,
+#                                640x360; 480 is 854 wide, the width rounded up to even). Invalid for the mode = its maximum.
 # xmow_vblank_hz = 60   # 120 = frame rate up to 60 (experimental); the game itself locks to 30
 # (xmow_vsync_relaxado: no effect, nothing sets a swap interval in this game; removed from the menu)
 # xmow_gpu_boost = false   # handheld only
+# (0.1.28: xmow_cpu_boost and xmow_pico_boost removed with their menu rows: test 34. No clock is set by the port except
+# the official handheld GPU boost profile above.)
 clock_no_scaling = true
 # frame counter on screen (user choice)
 switch_contador_fps = true
-# Video mode at start (also set by xmow_resolucion.txt, which wins): 0 or 720 = 1280x720, 540 = 960x540 (EXPERIMENTAL here:
-# only the SDK video_mode is changed, there is no scene patch for this game as there was in gears2-nx).
-# gow2_resolucion = 0
+# Internal resolution (live from the menu, at the next game frame; SAVE AND CLOSE writes it here): the engine's own
+# ScreenPercentage, in percent of 1280x720. The game draws the 3D view smaller and stretches it to 1280x720 itself; HUD
+# and text stay at 720. The video mode above stays 1280x720. 100 = 1280x720, 85 = 1088x612, 75 = 960x540,
+# 67 = 854x480, 50 = 640x360 (the same sizes as the output list). (gow2_resolucion and xmow_resolucion.txt are gone.)
+xmow_escala_interna = 100
+# Dynamic shadows (live from the menu, at the next game frame): 0 = all (the game's settings), 1 = reduced (half
+# MaxShadowResolution, shadow filter quality bias -1), 2 = off (no dynamic shadows).
+xmow_sombras = 0
+# 0.1.28: view distance, % of each primitive's own cull distance (MaxDrawDistance; ones without it are not touched):
+# 100 (the game), 75, 50. Live from the quick menu.
+xmow_distancia_corte = 75
+# 0.1.29: small object cull: 0 = OFF (the game), 1 = LOW (bounding sphere under ~4 pixels at 960x540), 2 = HIGH (~10).
+# Live from the quick menu.
+xmow_corte_pequenos = 0
+# 0.1.28: mesh detail: static meshes take their LOD as if this % farther away: 100 = HIGH (the game), 150 = MEDIUM,
+# 200 = LOW. Live from the advanced menu (graphics).
+xmow_detalhe_malha = 100
+# 0.1.28: lighting: 0 = STANDARD (the game), 2 = NONE (DynamicLights off). 0.1.29: gameplay maps only (title and menus
+# keep their lights), applied when the next map loads.
+xmow_iluminacao = 0
+# 0.1.33 (quality, all off by default; gameplay maps only, the title and menus keep the game's values; live):
+# Distortion (heat haze, refraction), Bloom (glow), FogVolumes (fog volume meshes) off on the levels.
+xmow_sem_distorcao = false
+xmow_sem_bloom = false
+xmow_sem_volumes_nevoa = false
+# 0.1.33: dynamic resolution on the levels: one step below xmow_escala_interna (never below 67) while the GPU alone
+# holds the frame rate under 29 fps, back when it has room. Off by default (softer image at the peaks).
+xmow_resolucao_dinamica = false
+# 0.1.28: how far the game's render thread may run ahead of the GPU thread: 1 = the game's own throttle, 2 = one frame
+# more (test: +1 frame of input delay). Live (advanced menu, frame pacing).
+xmow_d3d_quadros_adiante = 1
+# 0.1.28: shader constants compared only where the ring saw them change (same image, less ring work); false = 0.1.27.
+xmow_dk_constantes_sucias = true
+# 0.1.28: clear/resolve diagnostic text built only when written (same log); false = 0.1.27.
+xmow_registro_barato = true
 
 # ---- Storage ----
 # Mount the guest cache: device (UE3 opens "cache:\") on the cache folder next to the NRO (/switch/XMOW/cache), writable.
@@ -79,8 +125,46 @@ gow2_sonda = "700,650"
 # (0.1.13, old) the groups alternated: _tr (all translucents) and _p<N> (only pixel shader N of xmow_ab_ps, one per turn); the first 3 draws of each listed PS go to the log.
 xmow_captura_ab = false
 xmow_ab_ps = "2046,2892,1207,10127,1917,1121,6971"
-# Pixel shaders never drawn. 2639 = full-screen height fog that washed the image blue-white (tests 17/18). Empty = draw everything.
-xmow_omitir_ps = "2639"
+# Pixel shaders never drawn (tests). 2639 = full-screen height fog, left out everywhere over xmow_niebla_altura. Empty = draw everything.
+xmow_omitir_ps = ""
+# 0.1.20: full-screen height fog (PS 2639; quick menu HEIGHT FOG). 0 = AUTO: drawn everywhere, the main menu too (it is the
+# blue water look of the 360's menu); 1 = always; 2 = NO IN GAMEPLAY (since 0.1.32: off on the levels only, the title and
+# menus keep it). The log says "[xmow fog] frontend detected" / "frontend left".
+xmow_niebla_altura = 0
+
+# 0.1.20 CPU cuts for open views (diagnostico-0.1.20.md): occlusion query boxes (no color/depth/stencil write) are not drawn
+# while gow2_oclusion_real = false; hot threads pinning (xmow_afinidade_threads, OFF by default: UE3 render thread core 1, GPU ring core 2, priorities kept);
+# frames longer than xmow_log_hitch_ms (0 = off) are listed as [xmow hitch] lines in the 10 s summary (max 20 per 10 s).
+xmow_pular_caixas_consulta = true
+# 0.1.29: outside occlusion queries, draws that write no color, depth or stencil are not sent (same image); false = 0.1.28.
+# 0.1.30: no longer in the menu (stays on).
+xmow_pular_inertes = true
+xmow_sem_consultas_oclusao = true
+xmow_afinidade_threads = false
+xmow_log_hitch_ms = 50
+# 0.1.27: a shader's SPIR-V met for the first time is read from the card on a thread of its own, not on the GPU ring
+# (the helicopter's first-use hitches); its draws wait a frame or two
+xmow_spirv_lectura_fondo = true
+# 0.1.27: the shaders (SPIR-V and DKSH) read in each map are saved in xmow_precarga/ next to the NRO and read in the
+# background during that map's next loading screen; at most xmow_precarga_max of each per map
+xmow_precarga_mapa = true
+xmow_precarga_max = 2048
+# 0.1.27: shadercache_dksh_fix.bin (next to the NRO) replaces the PC cache's DKSH entries changed by the uam post-factor
+# fix (the title's blue-white glare: the DOF downsample came out 4 times too bright)
+xmow_dk_cache_correcciones = true
+# 0.1.26: stack sampling (the two busiest threads every millisecond); raw samples appended to logs/rex/rex_pilhas.bin by
+# the low-priority SD writer, at most xmow_amostragem_volcado_mb per boot (0 = no raw file). 0.1.28: off (only for a
+# profiled test; it slows the game a little).
+xmow_amostragem_pilas = false
+# 0.1.33 (diagnostic): SpeedTree leaves and fronds off on the levels (at the next level load), to see whether the jungle's
+# draws are SpeedTree.
+xmow_diag_sem_speedtree = false
+xmow_amostragem_volcado_mb = 192
+# 0.1.21: conservative real occlusion (diagnostico-0.1.20.md item 6), OFF by default (no menu row since 0.1.22).
+# Answered at once from a history per query box: hidden only after two valid GPU counts of 0 in a row; a visible box is
+# counted again every xmow_oclusao_reteste_quadros frames. Log: [xmow occlusion] every 10 s.
+xmow_oclusao_conservadora = false
+xmow_oclusao_reteste_quadros = 4
 
 # ---- Game patches (in the recompiled code; each can be turned off here) ----
 # 1: GUseTilingMode = FALSE, the scene is drawn at once instead of in two predicated tiles (as singularity-nx does).
@@ -96,6 +180,10 @@ gow2_formato_escena = 3
 # Skip the scene's depth prepass and the masked (alpha-tested) prepass, as singularity-nx: drawn, the base pass (GEQUAL) missed their depth by rounding and the ground came out black (test 16). Shadow maps are at EDRAM 5A0, not affected.
 gow2_sin_prepaso_z = true
 gow2_sin_prepaso_enmascarado = true
+# 0.1.32: UE3's depth prepass runs without its draw lists, so the render thread no longer builds the prepass draws
+# the two keys above drop anyway (only with both on and no occlusion queries); default true since 0.1.33 (test 39: same
+# image, about +1 fps); false = as 0.1.31.
+xmow_sem_prepasso_motor = true
 # Shader hash fixes of Gears of War 2 (trees, lamp glows, velocity buffer): meaningless for this game.
 # gow2_ajustes_gears2 = false
 # Hide startup movies (parts of paths separated by commas) with gow2_saltar_logos = true; none known yet.
@@ -123,6 +211,16 @@ gow2_oclusion_sin_esperar_ms = 8
 # input_xbox_layout = false
 # input_vibracion = false
 
+# 0.1.29: L3 + R3 also writes the full dump of the next frame (diagnostic, stalls the game); false = screen capture only.
+xmow_l3r3_volcado_completo = false
+# 0.1.30: draw cost diagnostic (the picture breaks while on): 0 = NO, 1 = 1 PIXEL (every game draw scissored to 1 pixel:
+# the fps left = the GPU's fixed cost per draw), 2 = EMPTY (every game draw keeps its state but draws 0 vertices: the fps
+# left = the cost of the state changes alone). Replaces xmow_diag_tijera_1px (still read: true = 1 PIXEL).
+xmow_diag_custo_dibujo = 0
+# 0.1.30: Direct3D's copies of its changed shader constants and render states into its command buffer done by
+# native code (same words at the same places); default true since 0.1.32; false = the recompiled code, as 0.1.29.
+xmow_d3d_nativo = true
+
 # ---- MODO DIAGNOSTICO (descomente para diagnostico) ----
 # Uncomment these lines (and comment the same keys above) for a diagnostic session. The stack sampler and the
 # periodic telemetry also need an empty file named telemetria.flag in /switch/XMOW (sdmc:/switch/XMOW/telemetria.flag);
@@ -141,3 +239,65 @@ gow2_oclusion_sin_esperar_ms = 8
 # gow2_busqueda_ps = true
 # gow2_busqueda_directa = true
 # xmow_captura_ab = true
+
+# ---- deko3d resolves, barriers and checks (SDK patches 1017 and 1018; every value shown is the default) ----
+# 0.1.29 (SDK 1035, test): a 3D copy after draws gets its barrier only when those draws touched its source or destination
+xmow_dk_barreira_copia_seletiva = false
+# 0.1.30 (SDK 1036): constant pushes joined across up to 2 unchanged registers and the same index buffer not bound again
+# (same image); false = 0.1.29.
+xmow_dk_menos_estado = true
+# 0.1.30 (SDK 1036, test): a depth resolve equal to the last one into the same texture, nothing written since, is skipped.
+# 0.1.32: no longer in the menu (tests 37 and 38 found none to skip).
+xmow_dk_resolve_z_unico = false
+# 0.1.31 (SDK 1037): a vertex fetch remap that maps every component to itself is sent as the identity code, so the
+# vertex shader skips its remap loop (same values); false = 0.1.30.
+xmow_dk_remapeo_normalizado = true
+# A color resolve swaps images only when the same copy also clears the color target
+# xmow_dk_intercambio_color_con_borrado = true
+# The clear that ends a swap covers the whole target, not only the used area
+# xmow_dk_borrado_entero_tras_intercambio = true
+# The barrier owed by a swap is never deferred
+# xmow_dk_barrera_tras_intercambio = true
+# A draw is checked against every fragment texture still bound, not only its own
+# xmow_dk_riesgo_todas_texturas = true
+# A resolved texture set aside makes the renderer forget its last remembered resolve
+# xmow_dk_resolve_unico_olvidar = true
+# A 2D texture read by a shader that declares a cube is given as a cubemap of six equal faces
+# xmow_dk_cubo_desde_2d = true
+# Small vertex/index ranges and small textures are always checked by their whole bytes
+# xmow_dk_conferir_pequenos_inteiro = true
+# Size limit in KiB of the vertex/index ranges checked whole (0 to 1024)
+# xmow_dk_conferir_pequenos_kb = 64
+# Largest width and height in texels of the textures checked whole (0 to 4096)
+# xmow_dk_conferir_pequenos_lado = 256
+# Of the small vertex/index ranges above, only those up to 2 KiB are hashed whole; larger ones check a rotating eighth of their lines
+# xmow_dk_conferir_pequenos_barato = true
+# A swap whose front buffer matches no resolved texture keeps the last frame instead of showing the latest resolved texture
+# xmow_dk_swap_sin_sustituto = true
+# Each frame, checks that a cached texture still holds the same game data (fixes doors and leaves drawn with another texture for a moment)
+# xmow_dk_identidad_texturas = true
+# Read cache for read-only game files, in MB (0 = off; menu: SD READ CACHE)
+# xmow_io_cache_mb = 64
+# Reads the next 128 KiB block in the background when reads are sequential
+# xmow_io_leitura_antecipada = false
+# Smallest read in KiB that goes through the read cache
+# xmow_io_cache_min_kb = 96
+# Smallest file size in MB that gets the read cache
+# xmow_io_cache_fichero_min_mb = 4
+# Seconds between the [io-cache] summary lines in the log
+# xmow_io_cache_resumen_s = 10
+# 0.1.33 (SDK 1039, test, off by default): the GPU's tiled cache on for the game's works, flushed before every target
+# change, copy, counter report and barrier (tile size in pixels, a multiple of 16). "[deko3d] xmow 1039" counts it.
+xmow_dk_tiled_cache = false
+xmow_dk_tiled_cache_tam = 128
+# 0.1.33 (render thread CPU cuts): the RHI's shader constant setters as native code (1, same bytes, same places; 0 =
+# as 0.1.32; 2 = SELF-CHECK: the translated code runs and the log says whether the native one writes the same); the
+# ring wake taken by the first kick only (test, false = as 0.1.32); material parameter replay (0 off, 1 VERIFY:
+# changes nothing and logs whether replaying would be exact, 2 ON: only after a clean VERIFY; it audits itself and
+# goes back to 0 on any difference).
+xmow_native_shader_params = 1
+xmow_ring_wake_once = false
+xmow_material_replay = 0
+# 0.1.33d (SDK 1039, test, off by default): identity draws use the folded vertex shaders of shadercache_dksh_vs.bin
+# (next to XMOW.nro; without the file nothing changes). Menu: DEKO RENDERING > FOLDED VERTEX INPUT.
+xmow_dk_vs_entrada_plegada = false

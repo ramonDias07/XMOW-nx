@@ -34,9 +34,15 @@ GCC_BRANCH = '''#elif defined(__GNUC__) && !defined(__clang__)
 anchor = '''#else
 #define DEFINE_REX_FUNC(name)                                       \\
   __attribute__((alias("__imp__" #name)))'''
-if text.count(anchor) != 1:
+if '__attribute__((alias("__imp__" #name), weak, noinline));' in text:
+    # lote C: o pch_h.inja do fork do LoS1-nx ja traz o ramo GCC (a mesma forma). O teste e pelo atributo depois do
+    # declarador, que so existe no ramo GCC: 'extern "C" REX_FUNC(name)' sozinho aparece tambem no ramo #else do
+    # pch do rexglue 0.10 e faria o ramo GCC sumir com -GeradorAntigo (link sem nenhum sub_).
+    pass
+elif text.count(anchor) != 1:
     sys.exit("DEFINE_REX_FUNC anchor not found exactly once")
-text = text.replace(anchor, GCC_BRANCH)
+else:
+    text = text.replace(anchor, GCC_BRANCH)
 
 if "REX_RAW_ADDR_W" not in text:
     text = text.rstrip() + '''
@@ -181,6 +187,16 @@ if "REX_SLOAD_U32" not in text:
 #define REX_SSTORE_U16(x, y) ({ u16 rex_sv_ = __builtin_bswap16(y); __builtin_memcpy(base + (u32)(x), &rex_sv_, 2); })
 #define REX_SSTORE_U32(x, y) ({ u32 rex_sv_ = __builtin_bswap32(y); __builtin_memcpy(base + (u32)(x), &rex_sv_, 4); })
 #define REX_SSTORE_U64(x, y) ({ u64 rex_sv_ = __builtin_bswap64(y); __builtin_memcpy(base + (u32)(x), &rex_sv_, 8); })
+// lote C (dform_disp_split): registrador e deslocamento separados; endereco base + zext(r) + d, como REX_ADDR_D.
+#define REX_SADDR_D(r, d) (base + (uint64_t)(u32)(r) + (int64_t)(d))
+#define REX_SLOAD_D_U8(r, d) ({ u8 rex_sv_; __builtin_memcpy(&rex_sv_, REX_SADDR_D(r, d), 1); rex_sv_; })
+#define REX_SLOAD_D_U16(r, d) ({ u16 rex_sv_; __builtin_memcpy(&rex_sv_, REX_SADDR_D(r, d), 2); __builtin_bswap16(rex_sv_); })
+#define REX_SLOAD_D_U32(r, d) ({ u32 rex_sv_; __builtin_memcpy(&rex_sv_, REX_SADDR_D(r, d), 4); __builtin_bswap32(rex_sv_); })
+#define REX_SLOAD_D_U64(r, d) ({ u64 rex_sv_; __builtin_memcpy(&rex_sv_, REX_SADDR_D(r, d), 8); __builtin_bswap64(rex_sv_); })
+#define REX_SSTORE_D_U8(r, d, y) ({ u8 rex_sv_ = (u8)(y); __builtin_memcpy(REX_SADDR_D(r, d), &rex_sv_, 1); })
+#define REX_SSTORE_D_U16(r, d, y) ({ u16 rex_sv_ = __builtin_bswap16(y); __builtin_memcpy(REX_SADDR_D(r, d), &rex_sv_, 2); })
+#define REX_SSTORE_D_U32(r, d, y) ({ u32 rex_sv_ = __builtin_bswap32(y); __builtin_memcpy(REX_SADDR_D(r, d), &rex_sv_, 4); })
+#define REX_SSTORE_D_U64(r, d, y) ({ u64 rex_sv_ = __builtin_bswap64(y); __builtin_memcpy(REX_SADDR_D(r, d), &rex_sv_, 8); })
 """
 
 # 7. The check build of tools/patch_local_regs.py (PLR_CHECK=1) reports through this (src/gow2_guards.cpp).
@@ -202,6 +218,15 @@ if "__builtin_arm_isb" not in text:
 #define __builtin_arm_isb(x) __asm__ __volatile__("isb" ::: "memory")
 #endif
 '''
+
+# 8. Lote C: as funcoes de rex/ppc/diet_ops.h do fork do LoS1-nx que o codigo das opcoes do gerador chama
+#    (rex::ppc::fctiwz/fctid/fctidz/fctiw, divw/divwu/divd/divdu, SingleToDoublePure, QuietSingleBits). O sdk-g2 nao
+#    tem o header; o texto vem de tools/xmow_diet_ops.h e vai inteiro para o PCH (so com o pch do gerador do fork,
+#    reconhecido pelas macros REX_LOAD_D_*).
+import os
+if "XMOW_DIET_OPS_H" not in text and "REX_LOAD_D_U8" in text:
+    diet = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "xmow_diet_ops.h"), encoding="utf-8").read()
+    text = text.rstrip() + "\n\n// Switch (make_nx_pch.py, point 8): tools/xmow_diet_ops.h\n" + diet
 
 # Only when it changes: every unit of the recompiled tree depends on this header through the PCH, so rewriting it
 # with the same text on each configure would make the next build recompile all of them.

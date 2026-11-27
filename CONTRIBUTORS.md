@@ -14,3 +14,5 @@ As contribuições dos projetos usados como base estão em [Referências](docs/r
   memória e *spin hints* sobre o código gerado.
 - **singularity-nx (panalexeu, GPL-3.0)** — patch do jogo que desliga o *predicated tiling* e 7 patches do SDK.
 - **masseffect-nx (nebadasSwifty, GPL-3.0)** — ferramentas de busca de lacunas do codegen.
+- **LoS1-nx (FurryLilManChild, SDK em BSD-3-Clause), com sa2-nx, sasrt-nx e banjo-nx** — o gerador de código do codegen da
+  0.1.34f e `app/tools/xmow_diet_ops.h` (`diet_ops.h`: helpers de ponto flutuante e divisão do PowerPC), segundo o cabeçalho do arquivo.

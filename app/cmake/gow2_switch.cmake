@@ -7,17 +7,17 @@
 # quotes, which finds the copy next to them first, so the build compiles a mirror of hard links / copies (tools/prepare_tree.py)
 # whose PCH is the Switch one (tools/make_nx_pch.py).
 
-set(GOW2_CODEGEN_DIR "" CACHE PATH "codegen output folder (holds generated/default/)")
+set(GOW2_CODEGEN_DIR "" CACHE PATH "out/codegen output folder (holds generated/default/)")
 set(GOW2_GENERATED "${GOW2_CODEGEN_DIR}/generated/default")
 if(NOT EXISTS "${GOW2_GENERATED}/sources.cmake")
     message(FATAL_ERROR
-        "GOW2_CODEGEN_DIR must point at the codegen output "
+        "GOW2_CODEGEN_DIR must point at the out/codegen output "
         "(no generated/default/sources.cmake under '${GOW2_CODEGEN_DIR}')")
 endif()
 
 set(REXSDK_DIR "" CACHE PATH "Path to the rexglue-sdk(-nx) source tree")
 if(NOT REXSDK_DIR)
-    get_filename_component(REXSDK_DIR "${CMAKE_CURRENT_LIST_DIR}/../../sdk" ABSOLUTE)
+    get_filename_component(REXSDK_DIR "${CMAKE_CURRENT_LIST_DIR}/../../sdk-g2" ABSOLUTE)
 endif()
 # A build with the guest's own flush-to-zero switches (SDK patch 0014), to compare with the fixed flush mode.
 option(GOW2_VARIABLE_FLUSH "Keep the guest's FPCR flush-to-zero switches (no fixed flush mode)" OFF)
@@ -51,6 +51,10 @@ if(REXGLUE_RECOMP_DEBUG_INFO STREQUAL "none")
     list(APPEND REXGLUE_RECOMP_OPTIONS $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-g0>)
 elseif(REXGLUE_RECOMP_DEBUG_INFO STREQUAL "line-tables-only")
     list(APPEND REXGLUE_RECOMP_OPTIONS $<$<CXX_COMPILER_ID:Clang,AppleClang>:-gline-tables-only>)
+endif()
+# 0.1.26: -fno-math-errno on the recompiled units (XMOW_MATH_ERRNO_OFF, CMakeLists.txt); the PCH gets it too.
+if(XMOW_MATH_ERRNO_OFF)
+    list(APPEND REXGLUE_RECOMP_OPTIONS -fno-math-errno)
 endif()
 
 # generated/default/sources.cmake: the support units and the recompiled ones. CMAKE_CURRENT_LIST_DIR there is the mirror.

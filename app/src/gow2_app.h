@@ -19,6 +19,7 @@
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
 #include <rex/system.h>
+#include <rex/ui/overlay/achievement_notification.h>
 
 #include <array>
 #include <cstdlib>
@@ -35,7 +36,6 @@
 #include "gow2_cpu.h"
 #include "gow2_gpu.h"
 #include "gow2_menu.h"
-#include "gow2_resolution.h"
 
 // The version (NACP and the first lines of the log), from CMake (GOW2_VERSION); the same string in both.
 #ifndef GOW2_VERSION
@@ -110,11 +110,24 @@ class XmowApp : public rex::ReXApp {
     REXLOG_INFO("xmow: game at {}; loading {}", root.string(), xex_image);
   }
 
-  // The scene resolution first: the game asks the OS for the display mode while it sets up its renderer.
+  // The video mode stays 1280x720 (xmow.toml). The internal resolution is the engine's own ScreenPercentage, set by
+  // xmow_resolucao_interna.cpp when the game loads its system settings (the old gow2_resolucion / xmow_resolucion.txt
+  // route only changed the video mode and cropped the image: moved out of the build).
   void OnPreLaunchModule() override {
-    gow2::resolucion::Aplicar();
-    gow2::menu::Instalar(package_ / "xmow.toml");  // the same file as paths.config_path (OnConfigurePaths)
+    // The same file as paths.config_path (OnConfigurePaths). The XDBF catalog is loaded once the module is set.
+    gow2::menu::Instalar(package_ / "xmow.toml", runtime() && runtime()->kernel_state() ? &achievements() : nullptr);
     gow2::cpu::Configurar();
+  }
+
+  void OnShutdown() override {
+    if (runtime() && runtime()->kernel_state()) gow2::menu::Desinstalar();
+  }
+
+  // The overlay's own achievements menu and toast (gow2_menu.cpp) replace the SDK's ImGui ones: an ImGui drawer moves
+  // the presentation to the UI thread (rex/ui/superposicion.h).
+  std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override { return nullptr; }
+  std::unique_ptr<rex::ui::AchievementNotificationDialog> CreateAchievementNotificationDialog() override {
+    return nullptr;
   }
 
  private:

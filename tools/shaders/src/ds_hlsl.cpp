@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -60,6 +61,12 @@ int main(int argc, char** argv) try {
   const std::filesystem::path salida = argv[2];
   // ShaderRecompiler::saltosLineales: forward-only jumps without the switch loop.
   const bool saltos_lineales = argc == 5;
+  // XMOW 0.1.23: DS_MULTIPLICACION_XENOS=1 in the environment turns on the Xenos multiply zero rule
+  // (ShaderRecompiler::multiplicacionXenos). Off for the shipped library: it made the pixel shaders' DKSH 3.3 times
+  // larger (mostly ALU), see ESTADO_XMOW.txt 0.1.23.
+  const char* const mult_xenos = std::getenv("DS_MULTIPLICACION_XENOS");
+  const bool multiplicacion_xenos = mult_xenos && mult_xenos[0] == '1';
+  if (multiplicacion_xenos) std::printf("regla de multiplicacion Xenos: SI\n");
 
   const std::vector<uint8_t> comun = LeerTodo(argv[3]);
   if (comun.empty()) {
@@ -101,6 +108,7 @@ int main(int argc, char** argv) try {
     std::fflush(stdout);
     ShaderRecompiler recompilador;
     recompilador.saltosLineales = saltos_lineales;
+    recompilador.multiplicacionXenos = multiplicacion_xenos;
     try {
       // No constant table (ShaderRecompiler::sinTabla): a first pass finds the samplers the shader fetches (unknown
       // ones are named s<fetch constant>) and their dimensions; the second declares them. A vertex shader's sampler N

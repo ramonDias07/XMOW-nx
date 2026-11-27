@@ -4,7 +4,7 @@
 > O port está em desenvolvimento e **ainda não é jogável**. Estas instruções servem para quem quer acompanhar,
 > testar builds de diagnóstico ou contribuir. Veja o [estado atual](estado.md).
 
-O build parte do disco **X-Men Origins: Wolverine – Uncaged Edition (USA, Europe)** de Xbox 360, sem title update. O
+Código-fonte da build **0.1.34f**. O build parte do disco **X-Men Origins: Wolverine – Uncaged Edition (USA, Europe)** de Xbox 360, sem title update. O
 arquivo de entrada é `default.xex` com SHA-256 `2f987f7ba3415bf9d1bc63bac3e671fd534eb33bb53878e816500c01bcd15378`
 (Title ID `41560816`). O código recompilado, os shaders e o NRO são gerados no seu computador a partir do seu dump.
 
@@ -18,9 +18,10 @@ Python e CMake funcionam em outros sistemas, mas ainda não há um script único
 - [DirectXShaderCompiler](https://github.com/microsoft/DirectXShaderCompiler/releases) (`dxc.exe`) e `spirv-val`
   (SPIRV-Tools; o pacote `mingw-w64-clang-x86_64-spirv-tools` do MSYS2 serve).
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) com devkitA64, libnx e as ferramentas Switch.
-- O `rexglue` de host do ReXGlue SDK 0.10. O usado nas builds de diagnóstico foi compilado da mesma base
-  (`rexglue-sdk-nx` `f961303`) seguindo a etapa 1 do [guia do Budokai3-nx](https://github.com/ramonDias07/Budokai3-nx/blob/main/docs/build.md).
-  No Windows, a pasta dele e a `bin` do LLVM-MinGW precisam estar no `PATH` (DLLs do runtime).
+- O gerador de código (`rexglue.exe`) da 0.1.34f é o do SDK do fork LoS1-nx (commit `3426a45`) mais `patches/los1-nx-generator.patch`; o
+  `tools/prepare_generator.py` (etapa 4) baixa, aplica o patch e compila com o LLVM-MinGW. As builds até a 0.1.16 usaram o
+  `rexglue` de host do ReXGlue SDK 0.10 (`-GeradorAntigo`). No Windows, a pasta do gerador e a `bin` do LLVM-MinGW precisam
+  estar no `PATH` (DLLs do runtime).
 
 ## 2. Preparar o SDK
 
@@ -30,9 +31,9 @@ Na raiz do repositório:
 python tools/prepare_sdk.py
 ```
 
-O script baixa o `rexglue-sdk-nx` no commit `f961303`, aplica `patches/rexglue-nx.patch` (camada do gears2-nx mais as
-mudanças do XMOW) e roda o `tools/switch_setup.py` do próprio SDK, que busca SPIRV-Cross e uam em commits fixos e
-monta o FFmpeg do Switch. O resultado fica em `sdk/`.
+O script baixa o `rexglue-sdk-nx` no commit `f961303`, aplica `patches/rexglue-nx.patch` (camada do gears2-nx, patches 0001 a 0050, mais os patches do XMOW 1001 a 1041
+em um só arquivo), roda o `tools/switch_setup.py` do próprio SDK, que busca SPIRV-Cross e uam em commits fixos e monta o
+FFmpeg do Switch, e por fim aplica `patches/uam-xmow.patch` (uma correção no uam, que só existe depois dessa etapa). O resultado fica em `sdk/`.
 
 ## 3. Extrair o disco
 
@@ -44,15 +45,28 @@ Os arquivos vão para `assets/game_root/` (`default.xex` e `WGame/`, cerca de 6,
 
 ## 4. Gerar o código recompilado
 
+Primeiro o gerador (uma vez; cerca de 10 minutos, com a busca das dependências):
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/codegen.ps1 -Rexglue C:\caminho\rexglue.exe -Python python -SemLocalRegs `
-  -ExtraPath C:\caminho\llvm-mingw\bin
+python tools/prepare_generator.py --llvm-mingw C:\caminho\llvm-mingw\bin --ninja C:\caminho\ninja.exe
 ```
 
-O manifesto e as funções extras ficam em `app/codegen/`. O script roda o codegen (cerca de 61 mil funções) e os passes
-sobre o código gerado na ordem do gears2-nx: traps de switch, barreiras de memória, *spin hints*, prólogo de folhas,
-acesso à pilha e chamadas inline. A saída fica em `out/codegen/generated/default/` (cerca de 290 MB) e não vai para o Git.
-As builds 0.1.x foram feitas com `-SemLocalRegs` (veja o teste 6 em [estado](estado.md)).
+O resultado é `out/generator/los1-nx/sdk/out/win-amd64/rexglue.exe`. Depois o codegen:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/codegen.ps1 `
+  -Rexglue out\generator\los1-nx\sdk\out\win-amd64\rexglue.exe -Python python -ExtraPath C:\caminho\llvm-mingw\bin
+```
+
+O manifesto, as funções extras e as opções do gerador ficam em `app/codegen/` (`xmow_flavor_lote1.toml` e a lista de
+exceções `local_regs_keep.txt`). O script roda o codegen (cerca de 61 mil funções) e os passes sobre o código gerado: traps
+de switch, barreiras de memória, *spin hints*, prólogo de folhas, acesso à pilha, chamadas inline, registradores locais
+(`patch_local_regs`, com a lista de exceções), leituras e escritas sem `volatile` e barreiras de laço. A saída fica em
+`out/codegen/generated/default/` (cerca de 290 MB) e não vai para o Git. O PCH do Switch é feito no configure do CMake
+(`app/tools/make_nx_pch.py`, com `app/tools/xmow_diet_ops.h`).
+
+Receita da 0.1.34f: sem nenhum dos parâmetros `-Sem...`. `-SemLocalRegs`, `-SemVolatil` e `-GeradorAntigo` voltam aos lotes
+anteriores (as builds até a 0.1.16 foram feitas com `-SemLocalRegs -SemVolatil -GeradorAntigo`; veja o teste 6 em [estado](estado.md)).
 
 ## 5. Gerar os shaders
 
